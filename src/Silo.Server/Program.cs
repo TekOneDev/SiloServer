@@ -68,14 +68,14 @@ if (windowsAuth) { app.UseAuthentication(); app.Use(async (http, next) => { if (
 app.Use(async (http, next) =>
 {
     http.Response.Headers["X-Content-Type-Options"] = "nosniff";
-    http.Response.Headers["Referrer-Policy"] = "no-referrer";
+    http.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";   // tile servers want to know the site
     if (http.Request.Path.StartsWithSegments("/api")) http.Response.Headers["Cache-Control"] = "no-store";
     await next();
 });
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
-    OnPrepareResponse = c => c.Context.Response.Headers["Cache-Control"] = c.File.Name.EndsWith(".html") ? "no-cache" : "public, max-age=3600",
+    OnPrepareResponse = c => c.Context.Response.Headers["Cache-Control"] = c.File.Name.EndsWith(".html") || c.File.Name.EndsWith(".js") || c.File.Name.EndsWith(".css") ? "no-cache" : "public, max-age=3600",
 });
 ApiRoutes.Map(app);
 app.MapFallbackToFile("index.html");

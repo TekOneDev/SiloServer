@@ -682,7 +682,7 @@ const Basemap = {
     this.online = await new Promise(res => {
       const img = new Image(); const t = setTimeout(() => res(false), 3500);
       img.onload = () => { clearTimeout(t); res(true); }; img.onerror = () => { clearTimeout(t); res(false); };
-      img.src = "https://tile.openstreetmap.org/3/7/4.png?" + Date.now();
+      img.src = "https://a.basemaps.cartocdn.com/rastertiles/voyager/3/7/4.png?" + Date.now();
     });
     return this.online;
   },
@@ -701,12 +701,16 @@ const Basemap = {
     });
     const mode = small ? (this.mode === "outline" ? "outline" : this.mode) : this.mode;
     if (mode === "outline" || this.online === false) { drawOutline(); return "outline"; }
-    const url = mode === "satellite"
-      ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      : "https://tile.openstreetmap.org/{z}/{y}/{x}.png";
-    const attr = mode === "satellite" ? "Imagery © Esri, Maxar, Earthstar Geographics" : "© OpenStreetMap contributors";
+    // Streets: CARTO's OpenStreetMap basemaps (free with attribution, light and dark styles; OSM's own
+    // tile servers refuse apps). Topo and satellite: Esri.
+    const src = {
+      streets: [`https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "rastertiles/voyager"}/{z}/{x}/{y}{r}.png`, "© OpenStreetMap contributors © CARTO", { subdomains: "abcd", maxZoom: 19 }],
+      topo: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}", "Tiles © Esri, HERE, Garmin, USGS, OpenStreetMap contributors", { maxZoom: 18 }],
+      satellite: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "Imagery © Esri, Maxar, Earthstar Geographics", { maxZoom: 18 }],
+    }[mode] || null;
+    if (!src) { drawOutline(); return "outline"; }
     drawOutline();
-    const tl = L.tileLayer(url, { maxZoom: 18, attribution: attr, className: mode === "streets" && dark ? "dark-tiles" : "" });
+    const tl = L.tileLayer(src[0], Object.assign({ attribution: src[1], referrerPolicy: "strict-origin-when-cross-origin" }, src[2]));
     let loaded = 0, failed = 0;
     tl.on("tileload", () => loaded++);
     tl.on("tileerror", () => { failed++; if (failed > 4 && loaded === 0) { this.online = false; group.removeLayer(tl); if (!small) MapView.showOffline(); } });
@@ -733,7 +737,7 @@ const MapView = {
         <div class="map-main"><div id="map"></div>
           <div class="map-tools"><button class="btn hidden" id="searchArea">${I.target} Search this area</button><button class="btn" id="drawArea">${I.rect} Draw an area</button></div>
           <div class="map-side-tools"><div class="layer-switch" id="layers">
-            <button data-l="streets">Streets</button><button data-l="satellite">Satellite</button><button data-l="outline">Outline</button></div></div>
+            <button data-l="streets">Streets</button><button data-l="topo">Topo</button><button data-l="satellite">Satellite</button><button data-l="outline">Outline</button></div></div>
           <div class="map-legend"><div class="r"><span class="sw" style="background:var(--accent)"></span>Report location</div><div class="r"><span class="sq"></span>Report extent</div><div class="r"><span class="sq" style="border-style:dashed"></span>Map sheet (approx.)</div></div>
         </div>
         <aside class="preview hidden" id="preview"></aside></div>`;
