@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(RuntimeIdentifier)' == 'win-x64'">net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion Condition="'$(RuntimeIdentifier)' == 'win-x64'">10.0.17763.0</SupportedOSPlatformVersion>
+    <DefineConstants Condition="'$(RuntimeIdentifier)' == 'win-x64'">$(DefineConstants);WINOCR</DefineConstants>
+    <AssemblyName>SiloServer</AssemblyName>
+    <RootNamespace>Silo.Server</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Lucene.Net" Version="4.8.0-beta00017" />
+    <PackageReference Include="Lucene.Net.Analysis.Common" Version="4.8.0-beta00017" />
+    <PackageReference Include="Lucene.Net.Facet" Version="4.8.0-beta00017" />
+    <PackageReference Include="Lucene.Net.Suggest" Version="4.8.0-beta00017" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="8.0.11" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Silo.Plugin.Sdk/Silo.Plugin.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="rules.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

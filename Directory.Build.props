@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Version>0.1.0</Version>
+    <Company>Silo</Company>
+    <Product>Silo Server</Product>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <NoWarn>$(NoWarn);CA1416;MSB3277;NU1603;NU1701</NoWarn>
+  </PropertyGroup>
+</Project>

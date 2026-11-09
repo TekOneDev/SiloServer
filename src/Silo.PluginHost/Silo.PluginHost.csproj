@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Silo.PluginHost</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Silo.Plugin.Files/Silo.Plugin.Files.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Pdf/Silo.Plugin.Pdf.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Office/Silo.Plugin.Office.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Image/Silo.Plugin.Image.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Rocscience/Silo.Plugin.Rocscience.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Datamine/Silo.Plugin.Datamine.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Geo/Silo.Plugin.Geo.csproj" />
+  </ItemGroup>
+</Project>

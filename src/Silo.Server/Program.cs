@@ -1,0 +1,94 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Negotiate;
+using Silo.Server.Api;
+using Silo.Server.Core;
+using Silo.Server.Index;
+using Silo.Server.Pipeline;
+
+// Worker mode: OCR runs in child processes of this executable.
+if (args.Length > 0 && args[0] == "ocr-worker") return OcrEngine.WorkerMain();
+// Installer helper: write the default settings file (if there is none) and stop.
+if (args.Length > 0 && args[0] == "init") { var s0 = new SettingsStore(); Console.WriteLine(Path.Combine(s0.Root, "settings.json")); return 0; }
+
+// One copy at a time: Windows can start a new service process while the old one is still stopping.
+using var single = new Mutex(false, OperatingSystem.IsWindows() ? @"Global\SiloServer" : "SiloServer");
+bool owned;
+try { owned = single.WaitOne(TimeSpan.FromSeconds(30)); } catch (AbandonedMutexException) { owned = true; }
+if (!owned) return 1;
+
+var settings = new SettingsStore();
+var log = new Log(settings.DataDir);
+log.Info($"Silo Server {typeof(Program).Assembly.GetName().Version?.ToString(3)} starting; data in {settings.DataDir}");
+
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+    WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+});
+builder.Host.UseWindowsService(o => o.ServiceName = "SiloServer");
+builder.Logging.ClearProviders();
+builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
+builder.Logging.SetMinimumLevel(LogLevel.Warning);
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
+builder.WebHost.UseUrls(settings.Current.Listen.ToArray());
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    o.SerializerOptions.NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals;
+});
+bool windowsAuth = OperatingSystem.IsWindows() && settings.Current.Auth == "windows";
+if (windowsAuth)
+{
+    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
+    builder.Services.AddAuthorization();
+}
+builder.Services.AddResponseCompression(o => o.EnableForHttps = true);
+
+var catalog = new Catalog(Path.Combine(settings.DataDir, "catalog.db"));
+var plugins = new PluginManager(settings, log);
+var rules = new Rules(settings, log, catalog);
+var index = new SearchIndex(Path.Combine(settings.DataDir, "index"));
+var engine = new Engine(settings, catalog, plugins, rules, index, log);
+var searcher = new Searcher(index, rules, () => engine.IndexBuilding)
+{
+    ExtraDims = plugins.DeclaredFields().Where(kv => kv.Value.spec.Facet).Select(kv => kv.Key).ToList(),
+};
+log.Info($"{plugins.All.Count} plugins: {string.Join(", ", plugins.All.Select(p => $"{p.Id} {p.Manifest.Version}{(p.Enabled ? "" : " (off)")}"))}");
+
+builder.Services.AddSingleton(settings).AddSingleton(log).AddSingleton(catalog).AddSingleton(plugins).AddSingleton(rules)
+    .AddSingleton(index).AddSingleton(searcher).AddSingleton(engine).AddHostedService(sp => sp.GetRequiredService<Engine>());
+
+var app = builder.Build();
+app.UseResponseCompression();
+if (windowsAuth) { app.UseAuthentication(); app.Use(async (http, next) => { if (http.User.Identity?.IsAuthenticated != true) { await http.ChallengeAsync(); return; } await next(); }); }
+app.Use(async (http, next) =>
+{
+    http.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    http.Response.Headers["Referrer-Policy"] = "no-referrer";
+    if (http.Request.Path.StartsWithSegments("/api")) http.Response.Headers["Cache-Control"] = "no-store";
+    await next();
+});
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = c => c.Context.Response.Headers["Cache-Control"] = c.File.Name.EndsWith(".html") ? "no-cache" : "public, max-age=3600",
+});
+ApiRoutes.Map(app);
+app.MapFallbackToFile("index.html");
+
+app.Lifetime.ApplicationStopped.Register(() =>
+{
+    try { engine.Dispose(); } catch { }
+    try { plugins.Dispose(); } catch { }
+    try { index.Dispose(); } catch { }
+    try { catalog.Dispose(); } catch { }
+    log.Info("Stopped.");
+});
+try { app.Run(); }
+catch (OperationCanceledException) { }
+catch (IOException e) when (e.Message.Contains("address", StringComparison.OrdinalIgnoreCase)) { log.Error("Could not listen: " + e.Message); return 2; }
+return 0;
