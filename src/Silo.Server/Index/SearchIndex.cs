@@ -293,6 +293,9 @@ public sealed class SearchIndex : IDisposable
     public int DocCount => WithDocs(s => s.IndexReader.NumDocs);
     public int PageCount => WithPages(s => s.IndexReader.NumDocs);
 
+    /// <summary>Build the facet tables for the current reader now, so the next search does not pay for it.</summary>
+    public void Warm() { try { WithDocs(s => FacetState(s.IndexReader)); } catch { } }
+
     public SortedSetDocValuesReaderState? FacetState(IndexReader reader)
     {
         lock (_facetLock)

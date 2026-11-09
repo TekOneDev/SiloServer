@@ -402,14 +402,17 @@ public sealed class Engine : BackgroundService
     async Task IndexLoop(CancellationToken stop)
     {
         var lastCommit = Stopwatch.StartNew();
+        var lastRefresh = Stopwatch.StartNew();
         long sinceCommit = 0;
+        bool unseen = false;
         while (!stop.IsCancellationRequested)
         {
             var (max, ids) = _cat.NextDirty(1000);
             if (ids.Count == 0)
             {
+                if (unseen) { _index.Refresh(); _index.Warm(); unseen = false; }
                 if (sinceCommit > 0) { _index.Commit(); sinceCommit = 0; lastCommit.Restart(); }
-                if (IndexBuilding) { IndexBuilding = false; _index.RefreshBlocking(); _log.Info("Search index is up to date."); }
+                if (IndexBuilding) { IndexBuilding = false; _index.RefreshBlocking(); _index.Warm(); _log.Info("Search index is up to date."); }
                 Stats.Activity.TryRemove("index", out _);
                 _rules.CheckLookups();
                 await Task.Delay(1000, stop);
@@ -419,7 +422,10 @@ public sealed class Engine : BackgroundService
             IndexBatch(ids);
             _cat.ClearDirty(max);
             sinceCommit += ids.Count;
-            _index.Refresh();
+            // Show new files to searches every 20 s, not every batch: each new reader rebuilds the facet
+            // tables, which slowed searches right down during big index builds. Warm them here, off the query path.
+            unseen = true;
+            if (lastRefresh.Elapsed > TimeSpan.FromSeconds(20)) { _index.Refresh(); _index.Warm(); lastRefresh.Restart(); unseen = false; }
             if (sinceCommit > 20000 || lastCommit.Elapsed > TimeSpan.FromSeconds(30)) { _index.Commit(); sinceCommit = 0; lastCommit.Restart(); }
         }
     }

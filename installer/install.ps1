@@ -14,7 +14,7 @@ $Dest = Join-Path $env:ProgramFiles 'Silo Server'
 $Data = Join-Path $env:ProgramData 'SiloServer'
 $ServiceName = 'SiloServer'
 $Port = 47820
-$Version = '0.1.1'
+$Version = '0.1.2'
 
 function Step($text) { Write-Host "  - $text" -ForegroundColor Cyan }
 
