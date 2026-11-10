@@ -1,10 +1,10 @@
-# Silo Server 0.1.2 (beta)
+# Silo Server 0.1.3 (beta)
 
 A search service for mining data: exploration reports, drilling data, and technical files from packages such as Datamine and Rocscience. It runs as a Windows service. You use it through a Google-style web page at **http://localhost:47820/**.
 
 ## Install
 
-1. Unzip `Silo-Server-0.1.2-win-x64.zip`.
+1. Unzip `Silo-Server-0.1.3-win-x64.zip`.
 2. Double-click **Install Silo Server.cmd**. Windows asks for administrator permission once.
 3. When it finishes, the search page opens. Indexing starts straight away. Watch progress at **http://localhost:47820/admin**.
 

@@ -249,7 +249,7 @@ public sealed class FolderSource : SourcePlugin
             InternalBufferSize = 64 * 1024,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.Security,
         };
-        void Note(string full)
+        void Note(string full, bool dirChange = false)
         {
             string rel;
             try { rel = Path.GetRelativePath(c.Root, full); } catch { return; }
@@ -257,7 +257,13 @@ public sealed class FolderSource : SourcePlugin
             if (SidecarNames.Contains(name, StringComparer.OrdinalIgnoreCase))
                 rel = (Path.GetDirectoryName(rel) is { Length: > 0 } d ? d : ".") + Path.DirectorySeparatorChar + "*";
             else if (Excluded(c, name) || rel.Split(Path.DirectorySeparatorChar).Any(seg => Excluded(c, seg))) return;
-            else if (Directory.Exists(full)) rel = rel + Path.DirectorySeparatorChar + "*";
+            else if (Directory.Exists(full))
+            {
+                // A folder's own "changed" event only means something inside it changed, and that has its own
+                // event. Rescanning the folder for it re-walked all of WAMEX for every new download.
+                if (dirChange) return;
+                rel = rel + Path.DirectorySeparatorChar + "*";
+            }
             lock (_pending) _pending.Add(rel);
             _flush!.Change(3000, Timeout.Infinite);
         }
@@ -268,7 +274,7 @@ public sealed class FolderSource : SourcePlugin
             if (keys.Count > 0) changed(keys);
         });
         _watcher.Created += (_, e) => Note(e.FullPath);
-        _watcher.Changed += (_, e) => Note(e.FullPath);
+        _watcher.Changed += (_, e) => Note(e.FullPath, dirChange: true);
         _watcher.Deleted += (_, e) => Note(e.FullPath);
         _watcher.Renamed += (_, e) => { Note(e.OldFullPath); Note(e.FullPath); };
         _watcher.Error += (_, _) => changed(["*"]);   // buffer overflow: ask for a full rescan

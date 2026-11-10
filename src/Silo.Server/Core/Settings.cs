@@ -124,5 +124,5 @@ public sealed class SettingsStore
         Current.Sources.FirstOrDefault(s => s.Id == sourceId)?.Config["root"]?.GetValue<string>();
 
     public int ExtractWorkers => Current.ExtractWorkers > 0 ? Current.ExtractWorkers : Math.Max(2, Environment.ProcessorCount - 2);
-    public int OcrWorkers => Current.OcrWorkers > 0 ? Current.OcrWorkers : Math.Max(1, Environment.ProcessorCount / 2);
+    public int OcrWorkers => Current.OcrWorkers > 0 ? Current.OcrWorkers : Math.Max(1, Environment.ProcessorCount - 2);   // below-normal priority, so searches stay quick
 }
