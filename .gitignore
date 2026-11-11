@@ -1,4 +1,24 @@
+# Build output
 bin/
 obj/
 out/
 dist/
+publish/
+*.zip
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# Runtime data (never commit an index, catalog, logs or settings)
+*.db
+*.db-wal
+*.db-shm
+logs/
+settings.json
+TestResults/
