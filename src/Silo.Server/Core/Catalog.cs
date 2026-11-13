@@ -418,10 +418,11 @@ public sealed class Catalog : IDisposable
 
     // ---------- index change log ----------
 
-    public (long maxSeq, List<long> ids) NextDirty(int n)
+    /// <summary>The oldest pending changes after sequence number <paramref name="after"/> (those up to it are in the index writer, waiting for a commit).</summary>
+    public (long maxSeq, List<long> ids) NextDirty(int n, long after = 0)
     {
         using var c = Reader(); using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT seq, item_id FROM dirty ORDER BY seq LIMIT $n"; cmd.Parameters.AddWithValue("$n", n);
+        cmd.CommandText = "SELECT seq, item_id FROM dirty WHERE seq > $a ORDER BY seq LIMIT $n"; cmd.Parameters.AddWithValue("$n", n); cmd.Parameters.AddWithValue("$a", after);
         long max = 0; var ids = new HashSet<long>();
         using var r = cmd.ExecuteReader();
         while (r.Read()) { max = r.GetInt64(0); ids.Add(r.GetInt64(1)); }

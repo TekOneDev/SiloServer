@@ -67,10 +67,40 @@ public sealed class SettingsStore
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".siloserver"));
         Directory.CreateDirectory(Root);
         _file = Path.Combine(Root, "settings.json");
-        Current = File.Exists(_file) ? JsonSerializer.Deserialize<ServerSettings>(File.ReadAllText(_file), Opts) ?? new() : Defaults();
+        Current = File.Exists(_file) ? Load() : Defaults();
         DataDir = string.IsNullOrWhiteSpace(Current.DataDir) ? Root : Current.DataDir!;
         Directory.CreateDirectory(DataDir);
         if (!File.Exists(_file)) Save(Current);
+    }
+
+    /// <summary>Set when settings.json could not be read at start; Program writes it to the log.</summary>
+    public string? LoadProblem { get; private set; }
+
+    /// <summary>
+    /// Reads settings.json. A file that cannot be read (a typo from a hand edit, a half-written file) used to stop the
+    /// service at every start. Now the unreadable file is kept beside it, and the last good copy is used (0.1.4).
+    /// </summary>
+    ServerSettings Load()
+    {
+        try { return JsonSerializer.Deserialize<ServerSettings>(File.ReadAllText(_file), Opts) ?? throw new JsonException("the file is empty"); }
+        catch (Exception e) when (e is JsonException or NotSupportedException)
+        {
+            var kept = Path.Combine(Root, $"settings.bad-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            try { File.Copy(_file, kept, true); } catch { }
+            var bak = _file + ".bak";
+            try
+            {
+                var s = JsonSerializer.Deserialize<ServerSettings>(File.ReadAllText(bak), Opts) ?? throw new JsonException("empty");
+                LoadProblem = $"settings.json could not be read ({e.Message}). The last good settings are in use; the unreadable file was kept as {kept}.";
+                File.Copy(bak, _file, true);
+                return s;
+            }
+            catch (Exception e2) when (e2 is JsonException or IOException or NotSupportedException)
+            {
+                // No good copy: stopping is safer than starting with default sources and addresses.
+                throw new InvalidDataException($"settings.json could not be read ({e.Message}) and there is no backup. Fix {_file} or delete it to start with defaults. A copy was kept as {kept}.", e);
+            }
+        }
     }
 
     static ServerSettings Defaults()
@@ -105,6 +135,8 @@ public sealed class SettingsStore
         {
             var tmp = _file + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(s, Opts));
+            // Keep the settings that were in use as the last good copy.
+            try { if (File.Exists(_file) && LoadProblem == null) File.Copy(_file, _file + ".bak", true); } catch (IOException) { }
             File.Move(tmp, _file, true);
             Current = s;
         }

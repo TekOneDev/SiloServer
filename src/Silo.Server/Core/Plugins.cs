@@ -203,7 +203,8 @@ public sealed class PluginManager : IDisposable
 
     public void Discover()
     {
-        var dirs = new List<string> { Path.Combine(_settings.BinDir, "plugins"), Path.Combine(_settings.Root, "plugins") };
+        var builtIn = Path.Combine(_settings.BinDir, "plugins");
+        var dirs = new List<string> { builtIn, Path.Combine(_settings.Root, "plugins") };
         dirs.AddRange(_settings.Current.PluginDirs);
         var found = new Dictionary<string, PluginInfo>();
         foreach (var root in dirs.Where(Directory.Exists))
@@ -211,6 +212,12 @@ public sealed class PluginManager : IDisposable
             {
                 try
                 {
+                    // A plugin is a program the service runs. Outside the install folder it must have been put there by an administrator.
+                    if (root != builtIn && !DataFolder.TrustedPlugin(Path.GetDirectoryName(mf)!, out var why))
+                    {
+                        _log.Warn($"Plugin in {Path.GetDirectoryName(mf)} not loaded: {why}. An administrator must copy it there.");
+                        continue;
+                    }
                     var m = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(mf), Contract.Json)!;
                     if (string.IsNullOrWhiteSpace(m.Id)) continue;
                     var info = new PluginInfo { Manifest = m, Dir = Path.GetDirectoryName(mf)! };

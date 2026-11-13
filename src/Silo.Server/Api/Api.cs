@@ -30,10 +30,38 @@ public static class ApiRoutes
         return new Principal { Name = name, Tokens = tokens.Distinct().ToList(), IsAdmin = admin };
     }
 
+    /// <summary>
+    /// The server's own browser: the connection comes from this machine, was not passed on by a proxy, and was made
+    /// to "localhost" by name. The last check matters: a web page elsewhere can point its own host name at 127.0.0.1
+    /// (DNS rebinding), and a reverse proxy on this machine makes every visitor look local (0.1.4).
+    /// </summary>
     static bool IsLocal(HttpContext http)
     {
         var ip = http.Connection.RemoteIpAddress;
-        return ip == null || IPAddress.IsLoopback(ip);
+        if (ip != null && !IPAddress.IsLoopback(ip)) return false;
+        var h = http.Request.Headers;
+        if (h.ContainsKey("X-Forwarded-For") || h.ContainsKey("Forwarded") || h.ContainsKey("X-Forwarded-Host") || h.ContainsKey("X-Real-IP")) return false;
+        return http.Request.Host.Host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
+    }
+
+    public static bool IsLoopbackUrl(string url)
+    {
+        var host = Uri.TryCreate(url.Replace("://*", "://0.0.0.0").Replace("://+", "://0.0.0.0"), UriKind.Absolute, out var u) ? u.Host : "";
+        return host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
+    }
+
+    /// <summary>
+    /// How a file is sent. Only PDFs, plain pictures and plain text are shown in the browser; everything else is a
+    /// download. An HTML or SVG file shown as a page would run its script as Silo itself, with the viewer's rights.
+    /// </summary>
+    public static (string type, bool inline) Delivery(string contentType, string ext)
+    {
+        ext = ext.TrimStart('.').ToLowerInvariant();
+        if (contentType == "application/pdf") return (contentType, true);
+        if (ext is "png" or "jpg" or "jpeg" or "gif" or "bmp" or "webp" or "tif" or "tiff") return (contentType, true);
+        if (contentType.StartsWith("text/") && ext is not ("htm" or "html" or "xhtml" or "xht" or "xml" or "svg" or "xsl" or "xslt" or "mht" or "mhtml" or "shtml"))
+            return ("text/plain; charset=utf-8", true);
+        return ("application/octet-stream", false);
     }
 
     public static void Map(WebApplication app)
@@ -122,13 +150,18 @@ public static class ApiRoutes
             var row = cat.Load(id);
             if (row?.Path == null || !File.Exists(row.Path)) return Results.NotFound("The file is not reachable from the server right now.");
             if (!types.TryGetContentType(row.Path, out var ct)) ct = "application/octet-stream";
-            bool inline = ct.StartsWith("text/") || ct.StartsWith("image/") || ct == "application/pdf";
+            var (type, inline) = Delivery(ct, Path.GetExtension(row.Path));
+            // Whatever the file is, it is never a page of ours: no script, no forms, no requests. (PDFs carry no policy: the browser's own viewer must run, and a PDF cannot script this site.)
+            if (type == "application/pdf") http.Response.Headers.Remove("Content-Security-Policy");
+            else http.Response.Headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
             var stream = new FileStream(row.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, FileOptions.Asynchronous);
-            return Results.File(stream, ct, inline ? null : row.Name, enableRangeProcessing: true);
+            return Results.File(stream, type, inline ? null : row.Name, enableRangeProcessing: true);
         });
 
-        api.MapGet("/footprint", (string ds, string coll, Catalog cat) =>
+        api.MapGet("/footprint", (HttpContext http, string ds, string coll, Catalog cat, Searcher s) =>
         {
+            // Only for a report the caller can see at least one file of.
+            if (s.Collection(ds + ":" + coll, Who(http, settings)).Count == 0) return Results.NotFound();
             var f = cat.Enrichments(ds, coll).Select(e => e.Footprint).FirstOrDefault(x => x != null);
             return f == null ? Results.NotFound() : Results.Json(f);
         });
