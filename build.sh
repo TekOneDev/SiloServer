@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the Windows package: Silo-Server-<version>-win-x64.zip (installer + self-contained app).
-# Runs on Linux or Windows (Git Bash) with the .NET 8 SDK.
+# Runs on Linux or Windows (Git Bash) with the .NET 10 SDK.
 set -euo pipefail
 cd "$(dirname "$0")"
 VER=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)

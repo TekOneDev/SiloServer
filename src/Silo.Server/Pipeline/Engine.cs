@@ -399,34 +399,58 @@ public sealed class Engine : BackgroundService
 
     // ---------- index ----------
 
+    // The highest change number handed to the index writers but not yet committed. Change-log rows are deleted only
+    // after the commit: a crash or forced stop in between used to drop those files from search for good; now they are
+    // indexed again at the next start (0.1.4).
+    long _applied;
+    readonly object _commitLock = new();
+
+    /// <summary>Saves both indexes to disk, then forgets the changes they now hold.</summary>
+    void CommitIndex()
+    {
+        lock (_commitLock)
+        {
+            _index.Commit();
+            if (_applied > 0) _cat.ClearDirty(_applied);
+        }
+    }
+
     async Task IndexLoop(CancellationToken stop)
     {
         var lastCommit = Stopwatch.StartNew();
         var lastRefresh = Stopwatch.StartNew();
         long sinceCommit = 0;
         bool unseen = false;
-        while (!stop.IsCancellationRequested)
+        try
         {
-            var (max, ids) = _cat.NextDirty(1000);
-            if (ids.Count == 0)
+            while (!stop.IsCancellationRequested)
             {
-                if (unseen) { _index.Refresh(); _index.Warm(); unseen = false; }
-                if (sinceCommit > 0) { _index.Commit(); sinceCommit = 0; lastCommit.Restart(); }
-                if (IndexBuilding) { IndexBuilding = false; _index.RefreshBlocking(); _index.Warm(); _log.Info("Search index is up to date."); }
-                Stats.Activity.TryRemove("index", out _);
-                _rules.CheckLookups();
-                await Task.Delay(1000, stop);
-                continue;
+                var (max, ids) = _cat.NextDirty(1000, _applied);
+                if (ids.Count == 0)
+                {
+                    if (unseen) { _index.Refresh(); _index.Warm(); unseen = false; }
+                    if (sinceCommit > 0) { CommitIndex(); sinceCommit = 0; lastCommit.Restart(); }
+                    if (IndexBuilding) { IndexBuilding = false; _index.RefreshBlocking(); _index.Warm(); _log.Info("Search index is up to date."); }
+                    Stats.Activity.TryRemove("index", out _);
+                    _rules.CheckLookups();
+                    await Task.Delay(1000, stop);
+                    continue;
+                }
+                Stats.Activity["index"] = $"Indexing {ids.Count:N0} items";
+                IndexBatch(ids);
+                _applied = max;
+                sinceCommit += ids.Count;
+                // Show new files to searches every 20 s, not every batch: each new reader rebuilds the facet
+                // tables, which slowed searches right down during big index builds. Warm them here, off the query path.
+                unseen = true;
+                if (lastRefresh.Elapsed > TimeSpan.FromSeconds(20)) { _index.Refresh(); _index.Warm(); lastRefresh.Restart(); unseen = false; }
+                if (sinceCommit > 20000 || lastCommit.Elapsed > TimeSpan.FromSeconds(30)) { CommitIndex(); sinceCommit = 0; lastCommit.Restart(); }
             }
-            Stats.Activity["index"] = $"Indexing {ids.Count:N0} items";
-            IndexBatch(ids);
-            _cat.ClearDirty(max);
-            sinceCommit += ids.Count;
-            // Show new files to searches every 20 s, not every batch: each new reader rebuilds the facet
-            // tables, which slowed searches right down during big index builds. Warm them here, off the query path.
-            unseen = true;
-            if (lastRefresh.Elapsed > TimeSpan.FromSeconds(20)) { _index.Refresh(); _index.Warm(); lastRefresh.Restart(); unseen = false; }
-            if (sinceCommit > 20000 || lastCommit.Elapsed > TimeSpan.FromSeconds(30)) { _index.Commit(); sinceCommit = 0; lastCommit.Restart(); }
+        }
+        finally
+        {
+            // A clean stop saves what is in the writers, so the next start has nothing to redo.
+            if (sinceCommit > 0) try { CommitIndex(); } catch (Exception e) { _log.Warn("index commit on stop: " + e.Message); }
         }
     }
 

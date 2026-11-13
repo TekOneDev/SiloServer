@@ -14,7 +14,7 @@ $Dest = Join-Path $env:ProgramFiles 'Silo Server'
 $Data = Join-Path $env:ProgramData 'SiloServer'
 $ServiceName = 'SiloServer'
 $Port = 47820
-$Version = '0.1.3'
+$Version = '0.1.4'
 
 function Step($text) { Write-Host "  - $text" -ForegroundColor Cyan }
 
@@ -37,6 +37,8 @@ if (-not $Elevated) {
 
 # Part 2, elevated.
 New-Item -ItemType Directory -Force -Path $Data | Out-Null
+# Settings, plugins and the index: SYSTEM and Administrators only (the service checks this again at every start).
+& icacls.exe $Data /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 Start-Transcript -Path (Join-Path $Data 'install.log') -Force | Out-Null
 try {
     Step 'Stopping any running copy'

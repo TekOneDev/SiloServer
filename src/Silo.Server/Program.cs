@@ -20,6 +20,7 @@ if (!owned) return 1;
 
 var settings = new SettingsStore();
 var log = new Log(settings.DataDir);
+if (settings.LoadProblem != null) log.Error(settings.LoadProblem);
 log.Info($"Silo Server {typeof(Program).Assembly.GetName().Version?.ToString(3)} starting; data in {settings.DataDir}");
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -48,10 +49,17 @@ if (windowsAuth)
 }
 builder.Services.AddResponseCompression(o => o.EnableForHttps = true);
 
+// Only SYSTEM and Administrators may write where the service keeps settings, plugins and the index (0.1.4).
+DataFolder.Lock(settings, log);
+if (settings.Current.Auth == "anonymous" && settings.Current.Listen.Any(u => !ApiRoutes.IsLoopbackUrl(u)) &&
+    settings.Current.Sources.Any(s => !string.Equals(s.Config["access"]?.GetValue<string>(), "public", StringComparison.OrdinalIgnoreCase)))
+    log.Warn("This server listens on the network without sign-in. Only files of sources marked public, or readable by Everyone, are shown. Set auth to \"windows\" before adding private sources.");
+
 var catalog = new Catalog(Path.Combine(settings.DataDir, "catalog.db"));
 var plugins = new PluginManager(settings, log);
 var rules = new Rules(settings, log, catalog);
 var index = new SearchIndex(Path.Combine(settings.DataDir, "index"));
+if (index.Recovered != null) log.Error($"The search index could not be opened ({index.Recovered}). It was started again from empty and is being rebuilt from the catalog; searches fill in as it goes.");
 var engine = new Engine(settings, catalog, plugins, rules, index, log);
 var searcher = new Searcher(index, rules, () => engine.IndexBuilding)
 {
@@ -68,6 +76,12 @@ if (windowsAuth) { app.UseAuthentication(); app.Use(async (http, next) => { if (
 app.Use(async (http, next) =>
 {
     http.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    // The pages run only Silo's own scripts; nothing in an indexed file can add script or call out (0.1.4).
+    // The file endpoint sets its own, stricter policy.
+    http.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://server.arcgisonline.com; " +
+        "connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
     http.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";   // tile servers want to know the site
     if (http.Request.Path.StartsWithSegments("/api")) http.Response.Headers["Cache-Control"] = "no-store";
     await next();

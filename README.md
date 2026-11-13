@@ -126,7 +126,7 @@ Logs are in `C:\ProgramData\SiloServer\logs`.
 
 ## Build
 
-Run `./build.sh` with the .NET 8 SDK. It runs the tests, publishes the server and plugin host for win-x64 (self-contained), writes the plugin manifests, and zips the package into `dist/`.
+Run `./build.sh` with the .NET 10 SDK. It runs the tests, publishes the server and plugin host for win-x64 (self-contained), writes the plugin manifests, and zips the package into `dist/`.
 
 ## Known limits in this beta
 

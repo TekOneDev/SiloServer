@@ -8,14 +8,7 @@
 <link rel="icon" type="image/svg+xml" href="/img/silo.svg">
 <link rel="stylesheet" href="/lib/leaflet/leaflet.css">
 <link rel="stylesheet" href="/css/app.css">
-<script>
-  // Theme before first paint: saved choice, else the system setting.
-  (function () {
-    var t = null; try { t = localStorage.getItem("silo.theme"); } catch (e) {}
-    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    document.documentElement.setAttribute("data-theme", t);
-  })();
-</script>
+<script src="/js/theme.js"></script>
 </head>
 <body>
 <div id="app"></div>

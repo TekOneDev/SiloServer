@@ -51,32 +51,60 @@ public sealed class SearchIndex : IDisposable
     public FacetsConfig Facets { get; } = new();
     readonly object _facetLock = new();
     (IndexReader? reader, SortedSetDocValuesReaderState? state) _facetState;
-    public bool Fresh { get; }
+    public bool Fresh { get; private set; }
 
     public static readonly Analyzer Analyzer = new PerFieldAnalyzerWrapper(SiloAnalyzer.Plain, new Dictionary<string, Analyzer> { [F.Stem] = SiloAnalyzer.Stem, [F.PStem] = SiloAnalyzer.Stem });
+
+    /// <summary>Set when the index on disk could not be opened and was started again from empty (it is rebuilt from the catalog).</summary>
+    public string? Recovered { get; }
 
     public SearchIndex(string dir)
     {
         System.IO.Directory.CreateDirectory(dir);
         var vf = System.IO.Path.Combine(dir, "schema.txt");
         Fresh = !File.Exists(vf) || File.ReadAllText(vf).Trim() != Schema.ToString();
-        if (Fresh)
+        void Wipe()
+        {
             foreach (var sub in new[] { "docs", "pages" })
             {
                 var p = System.IO.Path.Combine(dir, sub);
                 if (System.IO.Directory.Exists(p)) System.IO.Directory.Delete(p, true);
             }
-        _docDir = FSDirectory.Open(System.IO.Path.Combine(dir, "docs"));
-        _pageDir = FSDirectory.Open(System.IO.Path.Combine(dir, "pages"));
+        }
+        if (Fresh) Wipe();
         IndexWriterConfig Cfg(double ram) => new(V, Analyzer)
         {
             OpenMode = OpenMode.CREATE_OR_APPEND, Similarity = Sim, RAMBufferSizeMB = ram,
             MergePolicy = new TieredMergePolicy { SegmentsPerTier = 10, MaxMergedSegmentMB = 5 * 1024 },
         };
-        _docW = new IndexWriter(_docDir, Cfg(256));
-        _pageW = new IndexWriter(_pageDir, Cfg(512));
-        _docs = new SearcherManager(_docW, true, new SimFactory());
-        _pages = new SearcherManager(_pageW, true, new SimFactory());
+        (LDirectory, LDirectory, IndexWriter, IndexWriter, SearcherManager, SearcherManager) Open()
+        {
+            LDirectory dd = FSDirectory.Open(System.IO.Path.Combine(dir, "docs")), pd = FSDirectory.Open(System.IO.Path.Combine(dir, "pages"));
+            IndexWriter? dw = null, pw = null;
+            try
+            {
+                dw = new IndexWriter(dd, Cfg(256));
+                pw = new IndexWriter(pd, Cfg(512));
+                return (dd, pd, dw, pw, new SearcherManager(dw, true, new SimFactory()), new SearcherManager(pw, true, new SimFactory()));
+            }
+            catch
+            {
+                try { pw?.Rollback(); } catch { }
+                try { dw?.Rollback(); } catch { }
+                try { dd.Dispose(); pd.Dispose(); } catch { }
+                throw;
+            }
+        }
+        try { (_docDir, _pageDir, _docW, _pageW, _docs, _pages) = Open(); }
+        catch (Exception e) when (e is not LockObtainFailedException && !Fresh)
+        {
+            // A damaged index (a power cut, a full disk) used to stop the service at every start. The catalog holds
+            // everything needed to build it again, so start from empty and let the engine reindex (0.1.4).
+            Recovered = $"{e.GetType().Name}: {e.Message}";
+            Wipe();
+            Fresh = true;
+            (_docDir, _pageDir, _docW, _pageW, _docs, _pages) = Open();
+        }
         foreach (var d in new[] { F.DCommodity, F.DTenement, F.DCompany, F.DLith, F.DMethod, F.DAsx, F.DOwner, F.DFType })
             Facets.SetMultiValued(d, true);
         if (Fresh) { _docW.Commit(); _pageW.Commit(); File.WriteAllText(vf, Schema.ToString()); }

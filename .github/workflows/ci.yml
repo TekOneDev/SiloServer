@@ -1,0 +1,29 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test
+        run: dotnet test tests/Silo.Tests -c Release --nologo
+      - name: Build the server and plugin host
+        run: |
+          dotnet build src/Silo.Server -c Release --nologo
+          dotnet build src/Silo.PluginHost -c Release --nologo
+      - name: Packages with known vulnerabilities
+        shell: bash
+        run: |
+          for p in src/Silo.Server src/Silo.PluginHost; do
+            out=$(dotnet list "$p" package --vulnerable --include-transitive)
+            echo "$out"
+            if echo "$out" | grep -q "has the following vulnerable packages"; then exit 1; fi
+          done
