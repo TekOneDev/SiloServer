@@ -20,7 +20,7 @@ public static class AdminRoutes
             return await next(ctx);
         });
 
-        admin.MapGet("/status", (Engine e, Catalog cat, SearchIndex ix, PluginManager pm) =>
+        admin.MapGet("/status", (Engine e, Catalog cat, SearchIndex ix, PluginManager pm, Https.Plan tls) =>
         {
             var st = cat.CountByState();
             var (er, or, ir) = e.Stats.Rates();
@@ -32,6 +32,11 @@ public static class AdminRoutes
                 machine = Environment.MachineName, cores = Environment.ProcessorCount,
                 memoryMb = Environment.WorkingSet / 1048576,
                 dataDir = settings.DataDir, ocr = s.OcrStatus,
+                security = new
+                {
+                    runAs = DataFolder.RunningAs(), localSystem = DataFolder.IsLocalSystem(), https = tls.Status, auth = settings.Current.Auth,
+                    plugins = settings.Current.SandboxPlugins ? "sandboxed" : "not sandboxed", ocrSandbox = e.OcrIsolation,
+                },
                 items = st.Values.Sum(), pending = st.GetValueOrDefault(ItemState.Pending), needsOcr = st.GetValueOrDefault(ItemState.NeedsOcr),
                 done = st.GetValueOrDefault(ItemState.Done), metadataOnly = st.GetValueOrDefault(ItemState.MetadataOnly), failed = st.GetValueOrDefault(ItemState.Failed),
                 dirty = cat.DirtyCount(), indexDocs = ix.DocCount, indexPages = ix.PageCount, indexBytes = ix.SizeOnDisk(),
@@ -54,7 +59,7 @@ public static class AdminRoutes
             p.Id, p.Manifest.Name, p.Manifest.Version, p.Manifest.Kind, p.Manifest.Description, p.Manifest.Publisher, p.Manifest.Contract,
             p.Manifest.Extensions, p.Manifest.Names, p.Manifest.Datasets, p.Manifest.Concurrency, p.Manifest.TimeoutSec, p.Manifest.MaxFileMB,
             fields = p.Manifest.Fields, p.Enabled, p.Problem, p.Dir, calls = p.Calls, failures = p.Failures, timeouts = p.Timeouts, restarts = p.Restarts,
-            avgMs = p.Calls > 0 ? Math.Round(p.TotalMs / p.Calls, 1) : 0, template = p.Manifest.ConfigTemplate,
+            avgMs = p.Calls > 0 ? Math.Round(p.TotalMs / p.Calls, 1) : 0, template = p.Manifest.ConfigTemplate, isolation = p.Isolation,
         })));
 
         admin.MapPost("/plugins/{id}/enabled", (string id, bool on, PluginManager pm, Engine e) =>
@@ -68,8 +73,8 @@ public static class AdminRoutes
         {
             if (string.IsNullOrWhiteSpace(src.Name)) return Results.BadRequest(new { error = "name is required" });
             if (string.IsNullOrWhiteSpace(src.Id)) src.Id = new string(src.Name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
-            if (src.Config["root"]?.GetValue<string>() is { } root && src.Plugin == "silo.source.folder" && !Directory.Exists(root))
-                return Results.BadRequest(new { error = $"The service cannot see the folder {root}. Check the path, and that the service account can read it." });
+            if (src.Config["root"]?.GetValue<string>() is { } root && src.Plugin == "silo.source.folder" && CannotRead(root) is { } why)
+                return Results.BadRequest(new { error = why });
             settings.Update(s => { s.Sources.RemoveAll(x => x.Id == src.Id); s.Sources.Add(src); });
             e.RequestScan(src.Id);
             return Results.Ok(new { ok = true, id = src.Id });
@@ -108,5 +113,26 @@ public static class AdminRoutes
             });
             return Results.Ok(new { ok = true, note = "Worker counts, sign-in and listen addresses apply after a service restart." });
         });
+    }
+    /// <summary>
+    /// Why the service cannot read a folder, or null. Since 0.1.5 the service runs as its own account rather than
+    /// LocalSystem, so a folder that exists may still be closed to it: say which account needs Read access.
+    /// </summary>
+    public static string? CannotRead(string root)
+    {
+        var who = DataFolder.RunningAs();
+        try
+        {
+            if (!Directory.Exists(root)) return $"Silo Server cannot see the folder {root}. Check the path, and that {who} can read it.";
+            using var e = Directory.EnumerateFileSystemEntries(root).GetEnumerator();
+            e.MoveNext();
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"Silo Server runs as {who}, which cannot read {root}. Give that account Read access to the folder (for example: icacls \"{root}\" /grant \"{who}:(OI)(CI)RX\"), " +
+                   "or for a share, to the share and its folders, then add it again.";
+        }
+        catch (Exception ex) { return $"Silo Server cannot open {root}: {ex.Message}"; }
     }
 }

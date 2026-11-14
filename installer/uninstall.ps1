@@ -17,7 +17,7 @@ if (Get-Service SiloServer -ErrorAction SilentlyContinue) {
     Get-Process -Name 'SiloServer', 'Silo.PluginHost' -ErrorAction SilentlyContinue | Stop-Process -Force
     sc.exe delete SiloServer | Out-Null
 }
-Get-NetFirewallRule -DisplayName 'Silo Server' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -DisplayName 'Silo Server*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
 Remove-Item (Join-Path $menu 'Silo Search.url'), (Join-Path $menu 'Silo Server status.url') -ErrorAction SilentlyContinue
 Remove-Item 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SiloServer' -Recurse -ErrorAction SilentlyContinue
@@ -25,5 +25,6 @@ Set-Location $env:TEMP
 Remove-Item $Dest -Recurse -Force -ErrorAction SilentlyContinue
 if ($RemoveData) { Remove-Item $Data -Recurse -Force -ErrorAction SilentlyContinue; Write-Host "Removed the index and settings." }
 else { Write-Host "Kept the index and settings in $Data (run with -RemoveData to delete them)." }
+# A "Silo Server" HTTPS certificate made by the installer stays in the computer's store; delete it in certlm.msc if no longer wanted.
 Write-Host "Silo Server is removed." -ForegroundColor Green
 Start-Sleep -Seconds 3

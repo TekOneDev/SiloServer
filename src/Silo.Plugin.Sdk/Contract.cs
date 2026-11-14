@@ -66,6 +66,13 @@ public sealed class PluginManifest
     public List<FieldSpec> Fields { get; set; } = new();
     /// <summary>Sources: default settings shown in the admin page when a source is added.</summary>
     public JsonObject? ConfigTemplate { get; set; }
+    /// <summary>
+    /// False when the plugin cannot run sandboxed (it must write outside its scratch folder, or start other programs).
+    /// The server then runs it with the service's full rights and says so on the admin page. Default true (0.1.5).
+    /// </summary>
+    public bool Sandbox { get; set; } = true;
+    /// <summary>Filled in by the running plugin in its "hello" reply: which sandbox steps it applied to itself (0.1.5).</summary>
+    public string? Isolation { get; set; }
 }
 
 public sealed class FieldSpec

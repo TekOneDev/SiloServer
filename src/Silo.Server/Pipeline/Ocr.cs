@@ -19,6 +19,8 @@ public sealed class OcrReply
     public Dictionary<int, string> Pages { get; set; } = new();
     public int Rotated { get; set; }
     public string? Error { get; set; }
+    /// <summary>Set on a new worker's first reply: the sandbox steps it applied.</summary>
+    public string? Isolation { get; set; }
 }
 
 /// <summary>
@@ -146,6 +148,9 @@ public static class OcrEngine
     /// <summary>Worker process main: one JSON job per line in, one JSON reply per line out.</summary>
     public static int WorkerMain()
     {
+        // Job, no privileges, and low integrity when settings.ocrLowIntegrity is on (0.1.5). Reported on the first reply.
+        string? isolation;
+        try { isolation = Silo.Plugins.Sandbox.ApplyIfAsked(); } catch (Exception e) { isolation = "FAILED (" + e.Message + ")"; }
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(Console.Error);
         using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
@@ -155,6 +160,7 @@ public static class OcrEngine
             OcrReply r;
             try { r = Run(JsonSerializer.Deserialize<OcrJob>(line, Silo.Plugins.Contract.Json)!); }
             catch (Exception e) { r = new OcrReply { Error = e.GetType().Name + ": " + e.Message }; }
+            r.Isolation = isolation; isolation = null;
             stdout.WriteLine(JsonSerializer.Serialize(r, Silo.Plugins.Contract.Json));
         }
         return 0;
@@ -170,9 +176,18 @@ public sealed class OcrPool : IDisposable
     readonly Log _log;
     public int Size { get; }
 
-    public OcrPool(int size, Log log) { Size = size; _slots = new SemaphoreSlim(size, size); _log = log; }
+    readonly int _memoryMB;
+    readonly bool _low;
+    readonly string? _scratch;
+    /// <summary>What the newest worker reported about its sandbox, for the admin page.</summary>
+    public string Isolation { get; private set; } = "not started yet";
 
-    static Process Start()
+    public OcrPool(int size, Log log, int memoryMB = 4096, bool lowIntegrity = false, string? scratch = null)
+    {
+        Size = size; _slots = new SemaphoreSlim(size, size); _log = log; _memoryMB = memoryMB; _low = lowIntegrity; _scratch = scratch;
+    }
+
+    Process Start()
     {
         var exe = Environment.ProcessPath!;
         var psi = new ProcessStartInfo(exe, "ocr-worker")
@@ -180,7 +195,12 @@ public sealed class OcrPool : IDisposable
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true, StandardOutputEncoding = new UTF8Encoding(false),
         };
+        psi.Environment[Silo.Plugins.Sandbox.EnvMode] = _low ? "1" : "job";
+        psi.Environment[Silo.Plugins.Sandbox.EnvMemory] = _memoryMB.ToString();
+        if (_low && _scratch != null) psi.Environment["TEMP"] = psi.Environment["TMP"] = _scratch;
         var p = Process.Start(psi)!;
+        var problem = Silo.Plugins.Sandbox.Contain(p, (long)_memoryMB * 1024 * 1024);
+        if (problem != null) _log.Warn("OCR worker job could not be set up: " + problem);
         p.ErrorDataReceived += (_, _) => { };
         p.BeginErrorReadLine();
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
@@ -199,7 +219,13 @@ public sealed class OcrPool : IDisposable
             var read = p.StandardOutput.ReadLineAsync(ct).AsTask();
             if (!read.Wait(timeout, ct)) { Kill(p); p = null; return new OcrReply { Error = $"OCR timed out after {timeout.TotalSeconds:N0}s" }; }
             if (read.Result == null) { Kill(p); p = null; return new OcrReply { Error = "OCR worker crashed (damaged file?)" }; }
-            return JsonSerializer.Deserialize<OcrReply>(read.Result, Silo.Plugins.Contract.Json) ?? new OcrReply { Error = "bad reply" };
+            var reply = JsonSerializer.Deserialize<OcrReply>(read.Result, Silo.Plugins.Contract.Json) ?? new OcrReply { Error = "bad reply" };
+            if (reply.Isolation != null && reply.Isolation != Isolation)
+            {
+                if (reply.Isolation.Contains("FAILED")) _log.Warn("OCR worker sandbox: " + reply.Isolation);
+                Isolation = reply.Isolation;
+            }
+            return reply;
         }
         catch (OperationCanceledException) { if (p != null) Kill(p); p = null; throw; }
         catch (Exception e) { if (p != null) Kill(p); p = null; return new OcrReply { Error = e.Message }; }

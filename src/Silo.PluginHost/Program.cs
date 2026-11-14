@@ -13,12 +13,14 @@ return id switch
     "silo.filter.datamine" => PluginRunner.Run(new Silo.Plugins.Datamine.DatamineFilter()),
     "silo.enrich.au-geo" => PluginRunner.Run(new Silo.Plugins.AuGeo.AuGeoEnricher()),
     "--manifests" => Manifests(args.Length > 1 ? args[1] : "plugins"),
+    "--sandbox-selftest" => SandboxTest.Parent(),
+    "--sandbox-child" => SandboxTest.Child(args.Skip(1).ToArray()),
     _ => Usage(),
 };
 
 static int Usage()
 {
-    Console.Error.WriteLine("Silo.PluginHost <plugin id> | --manifests <folder>");
+    Console.Error.WriteLine("Silo.PluginHost <plugin id> | --manifests <folder> | --sandbox-selftest");
     return 2;
 }
 

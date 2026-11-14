@@ -62,6 +62,8 @@ public sealed class Engine : BackgroundService
     readonly SemaphoreSlim _scanLock = new(1, 1);
     OcrPool? _ocr;
     public bool OcrAvailable { get; private set; }
+    /// <summary>The OCR workers' sandbox, as the newest worker reported it (0.1.5).</summary>
+    public string OcrIsolation => _ocr?.Isolation ?? "no OCR workers";
     public volatile bool IndexBuilding;
 
     public Engine(SettingsStore settings, Catalog cat, PluginManager plugins, Rules rules, SearchIndex index, Log log)
@@ -124,7 +126,8 @@ public sealed class Engine : BackgroundService
             var why = OcrEngine.Check();
             OcrAvailable = why == null;
             Stats.OcrStatus = OcrAvailable ? $"on ({OcrEngine.Language})" : $"off: {why}";
-            if (OcrAvailable) _ocr = new OcrPool(_settings.OcrWorkers, _log);
+            if (OcrAvailable) _ocr = new OcrPool(_settings.OcrWorkers, _log, Math.Max(256, _settings.Current.PluginMemoryMB), _settings.Current.OcrLowIntegrity,
+                Path.Combine(_settings.DataDir, "plugin-scratch"));
         }
         else Stats.OcrStatus = "turned off in settings";
         _log.Info($"Pipeline ready: {_settings.ExtractWorkers} extraction workers, OCR {Stats.OcrStatus}.");

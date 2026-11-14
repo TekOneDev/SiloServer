@@ -4,7 +4,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Version>0.1.4</Version>
+    <Version>0.1.5</Version>
     <Company>Silo</Company>
     <Product>Silo Server</Product>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

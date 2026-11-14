@@ -15,9 +15,14 @@ public sealed class PluginInfo
     public bool Enabled { get; set; } = true;
     public string? Problem { get; set; }
     public long Calls, Failures, Restarts, Timeouts;
+    /// <summary>What the last started copy reported about its sandbox, for the admin page (0.1.5).</summary>
+    public string Isolation { get; set; } = "not started yet";
     public double TotalMs;
     public string Id => Manifest.Id;
 }
+
+/// <summary>How the core starts plugin copies (0.1.5).</summary>
+public sealed record PluginLaunch(string Bin, bool Sandbox, int MemoryMB, string Scratch);
 
 /// <summary>
 /// One running copy of a plugin. Sends one request at a time over stdin and reads JSON lines from stdout.
@@ -26,7 +31,7 @@ public sealed class PluginInfo
 public sealed class PluginProcess : IDisposable
 {
     readonly PluginInfo _info;
-    readonly string _bin;
+    readonly PluginLaunch _launch;
     readonly Log _log;
     Process? _p;
     long _next;
@@ -34,14 +39,14 @@ public sealed class PluginProcess : IDisposable
     readonly BlockingCollection<Reply> _replies = new();
     public Action<Reply>? OnEvent;
 
-    public PluginProcess(PluginInfo info, string bin, Log log) { _info = info; _bin = bin; _log = log; }
+    public PluginProcess(PluginInfo info, PluginLaunch launch, Log log) { _info = info; _launch = launch; _log = log; }
 
     public bool Running => _p is { HasExited: false };
 
     void Start()
     {
         var m = _info.Manifest;
-        var exe = m.Exec.Replace("{bin}", _bin.TrimEnd('\\', '/'));
+        var exe = m.Exec.Replace("{bin}", _launch.Bin.TrimEnd('\\', '/'));
         if (!Path.IsPathRooted(exe)) exe = Path.Combine(_info.Dir, exe);
         if (!OperatingSystem.IsWindows() && exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && !File.Exists(exe)) exe = exe[..^4];
         var psi = new ProcessStartInfo(exe)
@@ -51,8 +56,20 @@ public sealed class PluginProcess : IDisposable
             StandardOutputEncoding = new UTF8Encoding(false), StandardInputEncoding = new UTF8Encoding(false),
         };
         foreach (var a in m.Args) psi.ArgumentList.Add(a);
+        bool sandbox = _launch.Sandbox && m.Sandbox;
+        if (sandbox)
+        {
+            // The plugin sandboxes itself before it reads anything (Silo.Plugins.Sandbox), and its temp files go to a
+            // scratch folder that is the only place it can write.
+            psi.Environment[Sandbox.EnvMode] = "1";
+            psi.Environment[Sandbox.EnvMemory] = _launch.MemoryMB.ToString();
+            psi.Environment["TEMP"] = psi.Environment["TMP"] = psi.Environment["TMPDIR"] = _launch.Scratch;
+        }
+        else psi.Environment[Sandbox.EnvMode] = "0";
         var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+        // Every plugin, sandboxed or not, gets a job from outside: memory cap, no child programs, dies with the server.
+        string? jobProblem = sandbox ? Sandbox.Contain(p, (long)_launch.MemoryMB * 1024 * 1024) : null;
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log.Debug($"[{m.Id}] {e.Data}"); };
         p.BeginErrorReadLine();
         _p = p;
@@ -63,6 +80,11 @@ public sealed class PluginProcess : IDisposable
         var got = hello?.Deserialize<PluginManifest>(Contract.Json);
         if (got == null || got.Contract.Split('/').FirstOrDefault() != "silo.plugin" || got.Contract != Contract.Version)
             throw new InvalidOperationException($"plugin {m.Id} speaks '{got?.Contract}', the core speaks '{Contract.Version}'");
+        var iso = !sandbox ? (m.Sandbox ? "off (turned off in settings)" : "off (the plugin asks to run without one)")
+            : got.Isolation ?? "job only (the plugin does not sandbox itself)";
+        if (jobProblem != null) iso += $"; outside job FAILED ({jobProblem})";
+        if (_info.Isolation != iso && (iso.Contains("FAILED") || iso.StartsWith("off"))) _log.Warn($"[{m.Id}] sandbox: {iso}");
+        _info.Isolation = iso;
     }
 
     void ReadLoop(Process p, BlockingCollection<Reply> replies)
@@ -195,9 +217,19 @@ public sealed class PluginManager : IDisposable
     readonly ConcurrentDictionary<string, PluginPool> _pools = new();
     public List<PluginInfo> All { get; private set; } = new();
 
+    readonly PluginLaunch _launch;
+
     public PluginManager(SettingsStore settings, Log log)
     {
         _settings = settings; _log = log;
+        var scratch = Path.Combine(settings.DataDir, "plugin-scratch");
+        bool sandbox = settings.Current.SandboxPlugins;
+        if (sandbox)
+        {
+            try { Sandbox.PrepareScratch(scratch); }
+            catch (Exception e) { log.Warn("The plugins' scratch folder could not be set up, so some files may fail to read: " + e.Message); }
+        }
+        _launch = new PluginLaunch(settings.BinDir, sandbox, Math.Max(256, settings.Current.PluginMemoryMB), scratch);
         Discover();
     }
 
@@ -251,9 +283,9 @@ public sealed class PluginManager : IDisposable
     public IEnumerable<PluginInfo> Enrichers => All.Where(p => p.Enabled && p.Manifest.Kind == "enricher");
 
     public PluginPool Pool(PluginInfo info, int cap) =>
-        _pools.GetOrAdd(info.Id, _ => new PluginPool(info, Math.Max(1, Math.Min(cap, info.Manifest.Concurrency)), () => new PluginProcess(info, _settings.BinDir, _log)));
+        _pools.GetOrAdd(info.Id, _ => new PluginPool(info, Math.Max(1, Math.Min(cap, info.Manifest.Concurrency)), () => new PluginProcess(info, _launch, _log)));
 
-    public PluginProcess Process(PluginInfo info) => new(info, _settings.BinDir, _log);
+    public PluginProcess Process(PluginInfo info) => new(info, _launch, _log);
 
     /// <summary>Every field a plugin declares, by stored name ("x.{name}").</summary>
     public Dictionary<string, (FieldSpec spec, string plugin)> DeclaredFields()

@@ -969,6 +969,8 @@ async function adminStatus() {
   const up = new Date(s.started);
   $("#lead").innerHTML = `Version ${esc(s.version)} on <b>${esc(s.machine)}</b> · ${s.cores} cores · ${num(s.memoryMb)} MB in use · running since ${up.toLocaleString()} · OCR ${esc(s.ocr)}`;
   $("#dataDir").textContent = s.dataDir;
+  const sec = s.security || {};
+  $("#lead").innerHTML += `<br>Runs as <b${sec.localSystem ? ' style="color:var(--bad)"' : ""}>${esc(sec.runAs || "?")}</b>${sec.localSystem ? " (run the installer again to give it its own account)" : ""} · HTTPS ${esc(sec.https || "off")} · sign-in ${esc(sec.auth || "?")} · plugins ${esc(sec.plugins || "?")}`;
   const card = (k, v, sub) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
   $("#cards").innerHTML = card("Files", num(s.items), `${num(s.done)} read · ${num(s.metadataOnly)} name only`)
     + card("Searchable", num(s.indexDocs), `${num(s.indexPages)} pages indexed`)
@@ -998,7 +1000,7 @@ async function adminStatus() {
 async function adminPlugins() {
   let ps; try { ps = await api("/admin/plugins"); } catch (e) { return; }
   $("#plugins").innerHTML = `<tr><th>Plugin</th><th>Kind</th><th>Handles</th><th class="num">Calls</th><th class="num">Avg</th><th class="num">Fail / timeout</th><th>On</th></tr>` + ps.map(p => `<tr>
-    <td><b>${esc(p.name)}</b> <span class="muted">${esc(p.version)}</span><div class="muted" style="font-size:12.5px">${esc(p.description || "")}</div><div class="muted mono" style="font-size:11px">${esc(p.id)}</div>${p.problem ? `<div style="color:var(--bad);font-size:12.5px">${esc(p.problem)}</div>` : ""}</td>
+    <td><b>${esc(p.name)}</b> <span class="muted">${esc(p.version)}</span><div class="muted" style="font-size:12.5px">${esc(p.description || "")}</div><div class="muted mono" style="font-size:11px">${esc(p.id)}</div>${p.problem ? `<div style="color:var(--bad);font-size:12.5px">${esc(p.problem)}</div>` : ""}<div class="muted" style="font-size:11.5px${/FAILED|^off/.test(p.isolation || "") ? ";color:var(--bad)" : ""}">Sandbox: ${esc(p.isolation || "")}</div></td>
     <td>${esc(p.kind)}</td><td class="mono" style="font-size:12px;max-width:260px">${esc([...(p.extensions || []), ...(p.names || []), ...(p.datasets || []).map(d => "dataset:" + d)].join(" "))}</td>
     <td class="num">${num(p.calls)}</td><td class="num">${p.avgMs ? p.avgMs + " ms" : ""}</td><td class="num">${num(p.failures)} / ${num(p.timeouts)}</td>
     <td><button class="switch ${p.enabled ? "on" : ""}" data-plugin="${esc(p.id)}" title="${p.enabled ? "Turn off" : "Turn on"}"></button></td></tr>`).join("");
