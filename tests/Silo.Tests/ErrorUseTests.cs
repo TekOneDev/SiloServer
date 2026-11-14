@@ -42,6 +42,33 @@ public class ErrorUseTests
         Assert.Empty(unknown);
     }
 
+
+    [Fact]
+    public void Every_code_in_the_registry_is_raised_somewhere()
+    {
+        // A code nobody raises has an article that describes something a person can never see. Retire it or wire it in.
+        var dirs = new List<string> { Path.Combine(Root, "src"), Path.Combine(Root, "installer") };
+        var text = new System.Text.StringBuilder();
+        foreach (var d in dirs.Where(Directory.Exists))
+            foreach (var f in Directory.EnumerateFiles(d, "*.*", SearchOption.AllDirectories))
+            {
+                if (f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar) || f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar)) continue;
+                if (f.EndsWith(".g.cs", StringComparison.Ordinal) || f.EndsWith("silo-errors.js", StringComparison.Ordinal) || f.Contains(Path.DirectorySeparatorChar + "registry" + Path.DirectorySeparatorChar)) continue;
+                if (Path.GetExtension(f) is ".cs" or ".js" or ".ps1" or ".html" or ".cmd") text.Append(File.ReadAllText(f)).Append('\n');
+            }
+        var source = text.ToString();
+        var unused = new List<string>();
+        foreach (var d in ErrorRegistry.All.Where(d => !d.Deprecated && (d.Code.StartsWith("SILO-SRV-", StringComparison.Ordinal))))
+        {
+            var parts = d.Code.Split('-');
+            string Title(string x) => x[..1] + x[1..].ToLowerInvariant();
+            if (!source.Contains(d.Code, StringComparison.Ordinal) && !source.Contains($"{Title(parts[1])}.{Title(parts[2])}.{d.Name}", StringComparison.Ordinal)
+                && !Regex.IsMatch(source, $@"(?<![\w.]){Title(parts[2])}\.{d.Name}\b"))
+                unused.Add($"{d.Code} {d.Name}");
+        }
+        Assert.Empty(unused);
+    }
+
     [Fact]
     public void The_pages_error_table_matches_the_registry()
     {

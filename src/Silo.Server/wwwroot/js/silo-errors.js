@@ -121,7 +121,7 @@ window.SiloErrorTable = {
     "s": "info"
   },
   "SILO-SHR-READ-0012": {
-    "m": "Silo has no preview for .{ext} files. Open the file instead.",
+    "m": "Silo has no preview for files of type {ext}. Open the file instead.",
     "t": "There's no preview for this kind of file",
     "s": "info"
   },

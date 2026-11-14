@@ -107,7 +107,8 @@ public static class PluginFaults
     {
         if (e is SiloException s) return ReadFaults.Stored(s.Error, s.Args, null);
         var (kind, message) = e is PluginError ? Split(e.Message) : (e.GetType().Name, e.Message);
-        return ReadFaults.Stored(ReadFaults.Of(kind, message), null, message);
+        var def = ReadFaults.Of(kind, message);
+        return ReadFaults.Stored(def, ReadFaults.ArgsFor(def, message), message);
     }
 
     /// <summary>Why a source could not be scanned.</summary>
