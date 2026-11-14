@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Filter plugin over Silo Desktop's readers (SiloCommon Silo.Readers): one copy of the code for both products. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Silo.Plugin.Sdk/Silo.Plugin.Sdk.csproj" />
+    <ProjectReference Include="../../common/src/Silo.Readers/Silo.Readers.csproj" />
+  </ItemGroup>
+</Project>

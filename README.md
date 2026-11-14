@@ -1,10 +1,10 @@
-# Silo Server 0.1.5 (beta)
+# Silo Server 0.1.6 (beta)
 
 A search service for mining data: exploration reports, drilling data, and technical files from packages such as Datamine and Rocscience. It runs as a Windows service. You use it through a Google-style web page at **http://localhost:47820/**.
 
 ## Install
 
-1. Unzip `Silo-Server-0.1.5-win-x64.zip`.
+1. Unzip `Silo-Server-0.1.6-win-x64.zip`.
 2. Double-click **Install Silo Server.cmd**. Windows asks for administrator permission once.
 3. When it finishes, the search page opens. Indexing starts straight away. Watch progress at **http://localhost:47820/admin**.
 
@@ -105,6 +105,7 @@ Built in:
 | `silo.filter.image` | Photos and scans: EXIF/IPTC, GPS location. OCR |
 | `silo.filter.datamine` | Datamine `.dm`/`.dmx`: file type, fields, record count, block size, model extents |
 | `silo.filter.rocscience` | RS3 compute, model database, results and engine logs: materials, stages, strength models |
+| `silo.filter.readers` | The types Silo Desktop reads, from the shared SiloCommon readers (0.1.6): Word/Excel/PowerPoint 97-2003, OpenDocument, `.eml`/`.msg`, zip listings, DWG/DXF/DGN/STEP drawings, 3D print and mesh files, Datamine projects and `.dmx`, Leapfrog, Slide/RS2, OMF and Surfer grids. Facets: software, model type, has results |
 | `silo.enrich.au-geo` | Report footprints from WA (DEMIRS SLIP) and QLD (GSQ open data) |
 
 To add one:

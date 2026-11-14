@@ -23,7 +23,7 @@ $Data = Join-Path $env:ProgramData 'SiloServer'
 $ServiceName = 'SiloServer'
 $Port = 47820
 $HttpsPort = 47821
-$Version = '0.1.5'
+$Version = '0.1.6'
 
 function Step($text) { Write-Host "  - $text" -ForegroundColor Cyan }
 
