@@ -52,7 +52,7 @@ public static class SiloLsa {
     $bytes = New-Object byte[] $sid.BinaryLength
     $sid.GetBinaryForm($bytes, 0)
     $rc = [SiloLsa]::Grant($bytes, 'SeServiceLogonRight')
-    if ($rc -ne 0) { throw "Could not give $name the right to log on as a service (error $rc)." }
+    if ($rc -ne 0) { throw "Could not give $name the right to log on as a service (error $rc). (SILO-SRV-INST-0003)" }
 }
 
 # Read access for the service account to a local folder (shares are set on the file server).
@@ -70,10 +70,10 @@ function Grant-KeyRead($cert, [string]$who) {
     $name = $null
     if ($rsa -is [Security.Cryptography.RSACng]) { $name = $rsa.Key.UniqueName }
     elseif ($rsa) { $name = $rsa.CspKeyContainerInfo.UniqueKeyContainerName }
-    if (-not $name) { throw "Could not find the private key of certificate $($cert.Thumbprint)." }
+    if (-not $name) { throw "Could not find the private key of certificate $($cert.Thumbprint). (SILO-SRV-INST-0004)" }
     $paths = @((Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$name"), (Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$name"))
     $file = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $file) { throw "The private key file of certificate $($cert.Thumbprint) was not found." }
+    if (-not $file) { throw "The private key file of certificate $($cert.Thumbprint) was not found. (SILO-SRV-INST-0005)" }
     & icacls.exe $file /grant "${who}:R" | Out-Null
 }
 
@@ -88,8 +88,8 @@ if (-not $Elevated) {
     if ($Certificate) { $argList += @('-Certificate', "`"$Certificate`"") }
     if ($Account) { $argList += @('-Account', "`"$Account`"") }
     try { $p = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -Wait -PassThru }
-    catch { Write-Host "Installation was cancelled." -ForegroundColor Yellow; exit 1 }
-    if ($p.ExitCode -ne 0) { Write-Host "Installation failed (code $($p.ExitCode)). See $Data\install.log" -ForegroundColor Red; exit $p.ExitCode }
+    catch { Write-Host "Installation was cancelled. (SILO-SRV-INST-0001)" -ForegroundColor Yellow; exit 1 }
+    if ($p.ExitCode -ne 0) { Write-Host "Installation failed (exit code $($p.ExitCode)). See $Data\install.log (SILO-SRV-INST-0002)" -ForegroundColor Red; exit $p.ExitCode }
     Start-Process "http://localhost:$Port/"
     Write-Host ""
     Write-Host "Silo Server is installed and indexing. Search at http://localhost:$Port/" -ForegroundColor Green
@@ -139,8 +139,8 @@ try {
         if ($Certificate) {
             $thumb = ($Certificate -replace '[\s:]', '')
             $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb } | Select-Object -First 1
-            if (-not $cert) { throw "No certificate with thumbprint $thumb in the computer's store (Cert:\LocalMachine\My)." }
-            if (-not $cert.HasPrivateKey) { throw "Certificate $thumb has no private key." }
+            if (-not $cert) { throw "No certificate with thumbprint $thumb is in the computer's store (Cert:\LocalMachine\My). (SILO-SRV-INST-0006)" }
+            if (-not $cert.HasPrivateKey) { throw "Certificate $thumb has no private key. (SILO-SRV-INST-0007)" }
         } else {
             $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.FriendlyName -eq 'Silo Server' -and $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date).AddDays(60) } |
                 Sort-Object NotAfter -Descending | Select-Object -First 1
@@ -182,24 +182,24 @@ try {
     $svcId = "NT SERVICE\$ServiceName"
     $password = ''
     if ($Account -eq 'LocalSystem') {
-        Write-Host "    LocalSystem can do anything on this computer; a plugin bug would too. Prefer the default account." -ForegroundColor Yellow
+        Write-Host "    LocalSystem can do anything on this computer; a plugin bug would too. Prefer the default account. (SILO-SRV-SVC-0003)" -ForegroundColor Yellow
     } elseif ($Account -ieq $svcId) {
         # Virtual account: no password, few rights; on the network it acts as this computer's account.
     } elseif ($Account.EndsWith('$')) {
         # Group managed service account: Windows keeps the password.
         if (Get-Command Test-ADServiceAccount -ErrorAction SilentlyContinue) {
-            if (-not (Test-ADServiceAccount ($Account.Split('\')[-1].TrimEnd('$')))) { throw "$Account cannot be used on this computer. Allow it with Set-ADServiceAccount -PrincipalsAllowedToRetrieveManagedPassword, then try again." }
+            if (-not (Test-ADServiceAccount ($Account.Split('\')[-1].TrimEnd('$')))) { throw "$Account cannot be used on this computer. Allow it with Set-ADServiceAccount -PrincipalsAllowedToRetrieveManagedPassword, then try again. (SILO-SRV-INST-0008)" }
         }
         Grant-ServiceLogon $Account
     } else {
         $cred = Get-Credential -UserName $Account -Message "Password for $Account, the account Silo Server will run as"
-        if (-not $cred) { throw 'No password given.' }
+        if (-not $cred) { throw "No password was given for $Account, so the installer stopped. (SILO-SRV-INST-0011)" }
         Grant-ServiceLogon $Account
         $password = $cred.GetNetworkCredential().Password
     }
     $svc = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
     $res = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments @{ StartName = $(if ($Account -eq 'LocalSystem') { 'LocalSystem' } else { $Account }); StartPassword = $password }
-    if ($res.ReturnValue -ne 0) { throw "Could not set the service account to $Account (Win32_Service.Change returned $($res.ReturnValue))." }
+    if ($res.ReturnValue -ne 0) { throw "Could not set the service account to $Account (Win32_Service.Change returned $($res.ReturnValue)). (SILO-SRV-INST-0009)" }
 
     # Data folder: SYSTEM, Administrators and the service. Program folder and the library: read.
     & icacls.exe $Data /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${svcId}:(OI)(CI)M" | Out-Null
@@ -238,7 +238,7 @@ try {
         Start-Sleep -Milliseconds 500
         try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://localhost:$Port/api/v1/"; $ok = $r.StatusCode -eq 200 } catch { }
     }
-    if (-not $ok) { throw "The service did not answer on port $Port. See $Data\logs and the Windows Event Viewer (Application log)." }
+    if (-not $ok) { throw "The Silo Server service did not answer on port $Port. See $Data\logs and the Windows Event Viewer (Application log). (SILO-SRV-INST-0010)" }
 
     Step 'Adding Start menu shortcuts'
     $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
@@ -266,6 +266,8 @@ try {
 }
 catch {
     Write-Host $_ -ForegroundColor Red
+    # Every failure the installer knows carries its own code; anything else gets the installer's general one.
+    if ("$_" -notmatch 'SILO-[A-Z]{3}-[A-Z]+-\d{4}') { Write-Host "Installation failed. See $Data\install.log (SILO-SRV-INST-0002)" -ForegroundColor Red }
     Stop-Transcript | Out-Null
     Read-Host "Installation failed. Press Enter to close"
     exit 1
