@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Security.Cryptography.X509Certificates;
 
 namespace Silo.Server.Core;
@@ -21,15 +22,16 @@ public static class Https
     {
         var listen = s.Listen.ToList();
         if (!listen.Any(IsHttps)) return new Plan(listen, null, "off", null);
-        var cert = Find(s.Certificate, out var why);
+        var cert = Find(s.Certificate, out var why, out var fault);
         if (cert == null)
         {
-            log.Error($"HTTPS is set up in settings.json but no certificate could be used ({why}). Silo Server is listening on this computer only " +
-                      "until this is fixed: run the installer with -Https, or set \"certificate\" to the thumbprint of a certificate in the computer's store.");
+            // Each reason has its own code (not found, expired, no key, key not usable...); the log line carries all of them.
+            var f = fault ?? (Err.Srv.Svc.HttpsCertificateUnreadable, new { detail = why }, null);
+            log.Problem(f.Def, f.Args, f.Cause);
             return new Plan(["http://localhost:" + PortOf(listen.FirstOrDefault(u => !IsHttps(u)) ?? "http://localhost:47820", 47820)], null, "off: " + why, null);
         }
         var days = (cert.NotAfter - DateTime.Now).TotalDays;
-        if (days < 30) log.Warn($"The HTTPS certificate {cert.Subject} expires on {cert.NotAfter:d}. Renew it (run the installer with -Https again for the self-made one).");
+        if (days < 30) log.Problem(Err.Srv.Svc.HttpsCertificateExpiring, new { subject = Short(cert.Subject), date = cert.NotAfter.ToString("d") });
         var port = PortOf(listen.First(IsHttps), 443);
         var status = $"on, port {port}, certificate {Short(cert.Subject)} until {cert.NotAfter:yyyy-MM-dd}";
         log.Info("HTTPS " + status);
@@ -45,19 +47,22 @@ public static class Https
     }
 
     /// <summary>Finds the certificate: a .pfx path, a thumbprint, a subject, or (empty) the newest valid "Silo Server" one.</summary>
-    public static X509Certificate2? Find(string? spec, out string why)
+    public static X509Certificate2? Find(string? spec, out string why) => Find(spec, out why, out _);
+
+    /// <summary>As above, and why none could be used as a registry code (the first reason, when several certificates were tried).</summary>
+    public static X509Certificate2? Find(string? spec, out string why, out (ErrorDef Def, object? Args, Exception? Cause)? fault)
     {
-        why = "";
+        why = ""; fault = null;
         spec = spec?.Trim();
         try
         {
             if (!string.IsNullOrEmpty(spec) && spec.EndsWith(".pfx", StringComparison.OrdinalIgnoreCase))
             {
-                if (!File.Exists(spec)) { why = $"{spec} not found"; return null; }
+                if (!File.Exists(spec)) { why = $"{spec} not found"; fault = (Err.Srv.Svc.HttpsCertificateNotFound, new { which = Path.GetFileName(spec) }, null); return null; }
                 var c = X509CertificateLoader.LoadPkcs12FromFile(spec, null);
-                return Usable(c, out why) ? c : null;
+                return Usable(c, out why, out fault) ? c : null;
             }
-            if (!OperatingSystem.IsWindows()) { why = "a certificate store is only available on Windows; give a .pfx path"; return null; }
+            if (!OperatingSystem.IsWindows()) { why = "a certificate store is only available on Windows; give a .pfx path"; fault = (Err.Srv.Svc.HttpsCertificateNotFound, new { which = "no .pfx path given" }, null); return null; }
             using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
             store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
             IEnumerable<X509Certificate2> all = store.Certificates.Cast<X509Certificate2>();
@@ -69,28 +74,30 @@ public static class Https
             var reasons = new List<string>();
             foreach (var c in pick.OrderByDescending(c => c.NotAfter))
             {
-                if (Usable(c, out var r)) return c;
-                reasons.Add(r);
+                if (Usable(c, out var r, out var f)) { fault = null; return c; }
+                reasons.Add(r); fault ??= f;
             }
             why = reasons.Count > 0 ? string.Join("; ", reasons.Distinct()) : string.IsNullOrEmpty(spec) ? $"no certificate named \"{FriendlyName}\" in the computer's store" : $"no certificate matching \"{spec}\" in the computer's store";
+            fault ??= (Err.Srv.Svc.HttpsCertificateNotFound, new { which = string.IsNullOrEmpty(spec) ? $"named {FriendlyName}" : spec }, null);
             return null;
         }
-        catch (Exception e) { why = e.Message; return null; }
+        catch (Exception e) { why = e.Message; fault = (Err.Srv.Svc.HttpsCertificateUnreadable, new { detail = SafeText.Detail(e) }, e); return null; }
     }
 
-    static bool Usable(X509Certificate2 c, out string why)
+    static bool Usable(X509Certificate2 c, out string why, out (ErrorDef Def, object? Args, Exception? Cause)? fault)
     {
-        why = "";
-        if (DateTime.Now > c.NotAfter) { why = $"{c.Subject} expired on {c.NotAfter:d}"; return false; }
-        if (DateTime.Now < c.NotBefore) { why = $"{c.Subject} is not valid until {c.NotBefore:d}"; return false; }
-        if (!c.HasPrivateKey) { why = $"{c.Subject} has no private key"; return false; }
+        why = ""; fault = null;
+        var subject = Short(c.Subject);
+        if (DateTime.Now > c.NotAfter) { why = $"{c.Subject} expired on {c.NotAfter:d}"; fault = (Err.Srv.Svc.HttpsCertificateExpired, new { subject, date = c.NotAfter.ToString("d") }, null); return false; }
+        if (DateTime.Now < c.NotBefore) { why = $"{c.Subject} is not valid until {c.NotBefore:d}"; fault = (Err.Srv.Svc.HttpsCertificateNotYetValid, new { subject, date = c.NotBefore.ToString("d") }, null); return false; }
+        if (!c.HasPrivateKey) { why = $"{c.Subject} has no private key"; fault = (Err.Srv.Svc.HttpsCertificateNoPrivateKey, new { subject }, null); return false; }
         try
         {
             // Opening the key proves the service account may use it (the installer grants that).
             using var k = (IDisposable?)c.GetRSAPrivateKey() ?? c.GetECDsaPrivateKey();
-            if (k == null) { why = $"{c.Subject}: unsupported key type"; return false; }
+            if (k == null) { why = $"{c.Subject}: unsupported key type"; fault = (Err.Srv.Svc.HttpsCertificateNoPrivateKey, new { subject }, null); return false; }
         }
-        catch (Exception e) { why = $"the service account cannot use the private key of {c.Subject} ({e.Message})"; return false; }
+        catch (Exception e) { why = $"the service account cannot use the private key of {c.Subject} ({e.Message})"; fault = (Err.Srv.Svc.HttpsCertificateKeyNotUsable, new { subject }, e); return false; }
         return true;
     }
 

@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Text.Json.Nodes;
 using Silo.Server.Core;
 using Silo.Server.Index;
@@ -13,10 +14,10 @@ public static class AdminRoutes
         var admin = api.MapGroup("/admin").AddEndpointFilter(async (ctx, next) =>
         {
             var who = ApiRoutes.Who(ctx.HttpContext, settings);
-            if (!who.IsAdmin) return Results.Json(new { error = "Management is available on the server itself, or to Windows administrators." }, statusCode: 403);
+            if (!who.IsAdmin) return Fail.Result(Err.Srv.Api.AdminOnly);
             // Writes must come from our own pages (blocks cross-site form posts).
             if (!HttpMethods.IsGet(ctx.HttpContext.Request.Method) && ctx.HttpContext.Request.Headers["X-Silo"].FirstOrDefault() != "1")
-                return Results.Json(new { error = "missing X-Silo header" }, statusCode: 400);
+                return Fail.Result(Err.Srv.Api.NotFromSiloPage);
             return await next(ctx);
         });
 
@@ -71,10 +72,10 @@ public static class AdminRoutes
 
         admin.MapPost("/sources", (SourceConfig src, Engine e) =>
         {
-            if (string.IsNullOrWhiteSpace(src.Name)) return Results.BadRequest(new { error = "name is required" });
+            if (string.IsNullOrWhiteSpace(src.Name)) return Fail.Result(Err.Srv.Api.SourceNameMissing);
             if (string.IsNullOrWhiteSpace(src.Id)) src.Id = new string(src.Name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
-            if (src.Config["root"]?.GetValue<string>() is { } root && src.Plugin == "silo.source.folder" && CannotRead(root) is { } why)
-                return Results.BadRequest(new { error = why });
+            if (src.Config["root"]?.GetValue<string>() is { } root && src.Plugin == "silo.source.folder" && CannotReadFault(root) is { } why)
+                return Fail.Result(why.Def, why.Args, cause: why.Cause);
             settings.Update(s => { s.Sources.RemoveAll(x => x.Id == src.Id); s.Sources.Add(src); });
             e.RequestScan(src.Id);
             return Results.Ok(new { ok = true, id = src.Id });
@@ -118,21 +119,20 @@ public static class AdminRoutes
     /// Why the service cannot read a folder, or null. Since 0.1.5 the service runs as its own account rather than
     /// LocalSystem, so a folder that exists may still be closed to it: say which account needs Read access.
     /// </summary>
-    public static string? CannotRead(string root)
+    public static string? CannotRead(string root) => CannotReadFault(root) is { } f ? Fail.Text(f.Def, f.Args) : null;
+
+    /// <summary>The same, as the registry code for the reason: not there, access denied, or something else.</summary>
+    public static (ErrorDef Def, object? Args, Exception? Cause)? CannotReadFault(string root)
     {
         var who = DataFolder.RunningAs();
         try
         {
-            if (!Directory.Exists(root)) return $"Silo Server cannot see the folder {root}. Check the path, and that {who} can read it.";
+            if (!Directory.Exists(root)) return (Err.Srv.Src.FolderNotVisible, new { folder = root, account = who }, null);
             using var e = Directory.EnumerateFileSystemEntries(root).GetEnumerator();
             e.MoveNext();
             return null;
         }
-        catch (UnauthorizedAccessException)
-        {
-            return $"Silo Server runs as {who}, which cannot read {root}. Give that account Read access to the folder (for example: icacls \"{root}\" /grant \"{who}:(OI)(CI)RX\"), " +
-                   "or for a share, to the share and its folders, then add it again.";
-        }
-        catch (Exception ex) { return $"Silo Server cannot open {root}: {ex.Message}"; }
+        catch (UnauthorizedAccessException) { return (Err.Srv.Src.FolderAccessDenied, new { folder = root, account = who }, null); }
+        catch (Exception ex) { return (Err.Srv.Src.FolderNotOpened, new { folder = root, detail = SafeText.Detail(ex) }, ex); }
     }
 }

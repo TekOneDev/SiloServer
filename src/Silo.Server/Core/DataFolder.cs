@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -17,12 +18,12 @@ public static class DataFolder
         foreach (var dir in new[] { settings.Root, settings.DataDir }.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             // Never a whole drive: a data folder set to "D:\\" is left as it is, with a warning.
-            if (Path.GetPathRoot(Path.GetFullPath(dir)) == Path.GetFullPath(dir)) { log.Warn($"The data folder {dir} is a whole drive, so Silo cannot lock it. Move it into a folder of its own."); continue; }
+            if (Path.GetPathRoot(Path.GetFullPath(dir)) == Path.GetFullPath(dir)) { log.Problem(Err.Srv.Svc.DataFolderIsDrive, new { folder = dir }); continue; }
             try { if (!IsLockedWindows(dir, out _)) LockWindows(dir); }
             catch (Exception e)
             {
-                if (IsService()) throw new UnauthorizedAccessException($"Silo Server could not lock its folder {dir} to administrators: {e.Message}", e);
-                log.Warn($"Folder {dir} not locked (not running as the service): {e.Message}");
+                if (IsService()) throw new SiloException(Err.Srv.Svc.DataFolderNotLocked, new { folder = dir, detail = SafeText.Detail(e) }, e);
+                log.Problem(Err.Srv.Svc.DataFolderNotLockedDev, new { folder = dir, detail = SafeText.Detail(e) }, e);
             }
         }
     }
@@ -39,11 +40,11 @@ public static class DataFolder
         {
             if (Path.GetPathRoot(Path.GetFullPath(dir)) == Path.GetFullPath(dir)) continue;
             try { Silo.Isolation.Sandbox.ProtectFolder(dir); }
-            catch (Exception e) { log.Warn($"The data folder {dir} could not be closed to plugins: {e.Message}"); }
+            catch (Exception e) { log.Problem(Err.Srv.Svc.DataFolderOpenToPlugins, new { folder = dir, detail = SafeText.Detail(e) }, e); }
         }
         var extra = Path.Combine(settings.Root, "plugins");
         try { Directory.CreateDirectory(extra); Silo.Isolation.Sandbox.AllowRead(extra); }
-        catch (Exception e) { log.Warn($"The plugins folder {extra} could not be opened to plugins, so plugins installed there may not start: {e.Message}"); }
+        catch (Exception e) { log.Problem(Err.Srv.Svc.PluginsFolderNotOpened, new { folder = extra, detail = SafeText.Detail(e) }, e); }
     }
 
     /// <summary>The account the service runs as, for the log and admin page, e.g. "NT SERVICE\\SiloServer".</summary>

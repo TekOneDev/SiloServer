@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -87,7 +88,9 @@ public sealed class SettingsStore
     }
 
     /// <summary>Set when settings.json could not be read at start; Program writes it to the log.</summary>
-    public string? LoadProblem { get; private set; }
+    public string? LoadProblem => LoadFault is { } f ? new SiloError(f.Def, f.Args).Display : null;
+    /// <summary>The same, as its registry code with the values and exception behind it.</summary>
+    public (ErrorDef Def, object? Args, Exception? Cause)? LoadFault { get; private set; }
 
     /// <summary>
     /// Reads settings.json. A file that cannot be read (a typo from a hand edit, a half-written file) used to stop the
@@ -104,14 +107,14 @@ public sealed class SettingsStore
             try
             {
                 var s = JsonSerializer.Deserialize<ServerSettings>(File.ReadAllText(bak), Opts) ?? throw new JsonException("empty");
-                LoadProblem = $"settings.json could not be read ({e.Message}). The last good settings are in use; the unreadable file was kept as {kept}.";
+                LoadFault = (Err.Srv.Cfg.SettingsRestoredFromBackup, new { kept = Path.GetFileName(kept), detail = SafeText.Detail(e) }, e);
                 File.Copy(bak, _file, true);
                 return s;
             }
             catch (Exception e2) when (e2 is JsonException or IOException or NotSupportedException)
             {
                 // No good copy: stopping is safer than starting with default sources and addresses.
-                throw new InvalidDataException($"settings.json could not be read ({e.Message}) and there is no backup. Fix {_file} or delete it to start with defaults. A copy was kept as {kept}.", e);
+                throw new SiloException(Err.Srv.Cfg.SettingsUnreadableNoBackup, new { kept = Path.GetFileName(kept), detail = SafeText.Detail(e) }, e);
             }
         }
     }

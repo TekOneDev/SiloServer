@@ -24,6 +24,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Silo.Plugin.Sdk/Silo.Plugin.Sdk.csproj" />
+    <ProjectReference Include="../../common/src/Silo.Errors/Silo.Errors.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />

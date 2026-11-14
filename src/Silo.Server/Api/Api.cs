@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Net;
 using System.Security.Principal;
 using System.Text.Json.Nodes;
@@ -148,7 +149,7 @@ public static class ApiRoutes
             var hit = s.Get(id, Who(http, settings));
             if (hit == null) return Results.NotFound();
             var row = cat.Load(id);
-            if (row?.Path == null || !File.Exists(row.Path)) return Results.NotFound("The file is not reachable from the server right now.");
+            if (row?.Path == null || !File.Exists(row.Path)) return Fail.Result(Err.Srv.Api.FileNotReachable);
             if (!types.TryGetContentType(row.Path, out var ct)) ct = "application/octet-stream";
             var (type, inline) = Delivery(ct, Path.GetExtension(row.Path));
             // Whatever the file is, it is never a page of ours: no script, no forms, no requests. (PDFs carry no policy: the browser's own viewer must run, and a PDF cannot script this site.)
