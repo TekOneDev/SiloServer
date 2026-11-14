@@ -15,5 +15,6 @@
     <ProjectReference Include="../Silo.Plugin.Rocscience/Silo.Plugin.Rocscience.csproj" />
     <ProjectReference Include="../Silo.Plugin.Datamine/Silo.Plugin.Datamine.csproj" />
     <ProjectReference Include="../Silo.Plugin.Geo/Silo.Plugin.Geo.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Readers/Silo.Plugin.Readers.csproj" />
   </ItemGroup>
 </Project>

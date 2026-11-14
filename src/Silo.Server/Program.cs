@@ -34,7 +34,14 @@ builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
-builder.WebHost.UseUrls(settings.Current.Listen.ToArray());
+var https = Https.Prepare(settings.Current, log);
+builder.WebHost.UseUrls(https.Listen.ToArray());
+if (https.Certificate != null)
+    builder.WebHost.ConfigureKestrel(k => k.ConfigureHttpsDefaults(h =>
+    {
+        h.ServerCertificate = https.Certificate;
+        h.SslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13;
+    }));
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
@@ -51,6 +58,11 @@ builder.Services.AddResponseCompression(o => o.EnableForHttps = true);
 
 // Only SYSTEM and Administrators may write where the service keeps settings, plugins and the index (0.1.4).
 DataFolder.Lock(settings, log);
+// ...and the sandboxed plugins and OCR workers may not read it at all (0.1.5).
+if (settings.Current.SandboxPlugins) DataFolder.ProtectFromPlugins(settings, log);
+log.Info($"Running as {DataFolder.RunningAs()}; plugins {(settings.Current.SandboxPlugins ? "sandboxed" : "NOT sandboxed (sandboxPlugins is off)")}; HTTPS {https.Status}.");
+if (DataFolder.IsLocalSystem())
+    log.Warn("Silo Server runs as LocalSystem, the most powerful account on this computer. Run the installer again to move it to its own account (NT SERVICE\\SiloServer, or a domain account with -Account).");
 if (settings.Current.Auth == "anonymous" && settings.Current.Listen.Any(u => !ApiRoutes.IsLoopbackUrl(u)) &&
     settings.Current.Sources.Any(s => !string.Equals(s.Config["access"]?.GetValue<string>(), "public", StringComparison.OrdinalIgnoreCase)))
     log.Warn("This server listens on the network without sign-in. Only files of sources marked public, or readable by Everyone, are shown. Set auth to \"windows\" before adding private sources.");
@@ -68,13 +80,22 @@ var searcher = new Searcher(index, rules, () => engine.IndexBuilding)
 log.Info($"{plugins.All.Count} plugins: {string.Join(", ", plugins.All.Select(p => $"{p.Id} {p.Manifest.Version}{(p.Enabled ? "" : " (off)")}"))}");
 
 builder.Services.AddSingleton(settings).AddSingleton(log).AddSingleton(catalog).AddSingleton(plugins).AddSingleton(rules)
-    .AddSingleton(index).AddSingleton(searcher).AddSingleton(engine).AddHostedService(sp => sp.GetRequiredService<Engine>());
+    .AddSingleton(index).AddSingleton(searcher).AddSingleton(engine).AddSingleton(https).AddHostedService(sp => sp.GetRequiredService<Engine>());
 
 var app = builder.Build();
 app.UseResponseCompression();
-if (windowsAuth) { app.UseAuthentication(); app.Use(async (http, next) => { if (http.User.Identity?.IsAuthenticated != true) { await http.ChallengeAsync(); return; } await next(); }); }
+if (https.HttpsPort != null && settings.Current.HttpsRedirect)
+    app.Use(async (http, next) =>
+    {
+        // Other computers are moved to HTTPS before anything else, sign-in included, so passwords and results never cross the network in the clear.
+        var remote = http.Connection.RemoteIpAddress;
+        var target = Https.RedirectTarget(http.Request, remote == null || System.Net.IPAddress.IsLoopback(remote), https.HttpsPort);
+        if (target != null) { http.Response.Redirect(target, permanent: true, preserveMethod: true); return; }
+        await next();
+    });
 app.Use(async (http, next) =>
 {
+    if (http.Request.IsHttps) http.Response.Headers["Strict-Transport-Security"] = "max-age=15552000";
     http.Response.Headers["X-Content-Type-Options"] = "nosniff";
     // The pages run only Silo's own scripts; nothing in an indexed file can add script or call out (0.1.4).
     // The file endpoint sets its own, stricter policy.
@@ -86,6 +107,7 @@ app.Use(async (http, next) =>
     if (http.Request.Path.StartsWithSegments("/api")) http.Response.Headers["Cache-Control"] = "no-store";
     await next();
 });
+if (windowsAuth) { app.UseAuthentication(); app.Use(async (http, next) => { if (http.User.Identity?.IsAuthenticated != true) { await http.ChallengeAsync(); return; } await next(); }); }
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {

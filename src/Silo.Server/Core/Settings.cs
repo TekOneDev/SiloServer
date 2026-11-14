@@ -44,6 +44,19 @@ public sealed class ServerSettings
     public List<string> PluginDirs { get; set; } = new();
     /// <summary>Plugins switched off by id.</summary>
     public List<string> DisabledPlugins { get; set; } = new();
+    /// <summary>Run plugins in a sandbox: own job, no privileges, low integrity (0.1.5). A plugin can opt out in its manifest.</summary>
+    public bool SandboxPlugins { get; set; } = true;
+    /// <summary>Memory cap for each plugin and OCR worker process, in MB.</summary>
+    public int PluginMemoryMB { get; set; } = 4096;
+    /// <summary>Also run OCR workers at low integrity. Off by default until checked on a real server: Windows OCR opens files through WinRT.</summary>
+    public bool OcrLowIntegrity { get; set; }
+    /// <summary>
+    /// HTTPS certificate for "https://" listen addresses (0.1.5): a thumbprint or subject name in the computer's
+    /// certificate store (LocalMachine\My), or a .pfx file path. Empty: the newest valid certificate named "Silo Server".
+    /// </summary>
+    public string? Certificate { get; set; }
+    /// <summary>When HTTPS is on, send plain-HTTP requests from other computers to the HTTPS address (this computer keeps HTTP).</summary>
+    public bool HttpsRedirect { get; set; } = true;
     /// <summary>Optional hook for search by meaning (parked; see ISemanticProvider).</summary>
     public string? Semantic { get; set; }
 }

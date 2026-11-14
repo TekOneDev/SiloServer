@@ -4,4 +4,8 @@
     <RootNamespace>Silo.Plugins</RootNamespace>
     <Description>Contract and runner for Silo plugins (contract silo.plugin/1).</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The sandbox plugins apply to themselves, shared with Silo Desktop (SiloCommon, git submodule in common/). -->
+    <ProjectReference Include="../../common/src/Silo.Sandbox/Silo.Sandbox.csproj" />
+  </ItemGroup>
 </Project>

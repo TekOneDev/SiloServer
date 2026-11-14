@@ -1,3 +1,4 @@
+using Silo.Isolation;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -119,6 +120,9 @@ public static class PluginRunner
         var stdout = Console.OpenStandardOutput();
         Console.SetOut(Console.Error);
         var w = new Writer(stdout);
+        // Sandbox before the first file is opened, when the server asks for it (0.1.5).
+        try { manifest.Isolation = Sandbox.ApplyIfAsked(); }
+        catch (Exception e) { manifest.Isolation = "FAILED (" + e.Message + ")"; }
         using var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
         string? line;
         while ((line = input.ReadLine()) != null)

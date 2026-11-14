@@ -12,13 +12,16 @@ return id switch
     "silo.filter.rocscience" => PluginRunner.Run(new Silo.Plugins.Rocscience.RocscienceFilter()),
     "silo.filter.datamine" => PluginRunner.Run(new Silo.Plugins.Datamine.DatamineFilter()),
     "silo.enrich.au-geo" => PluginRunner.Run(new Silo.Plugins.AuGeo.AuGeoEnricher()),
+    "silo.filter.readers" => PluginRunner.Run(new Silo.Plugins.Readers.ReadersFilter()),
     "--manifests" => Manifests(args.Length > 1 ? args[1] : "plugins"),
+    "--sandbox-selftest" => SandboxTest.Parent(),
+    "--sandbox-child" => SandboxTest.Child(args.Skip(1).ToArray()),
     _ => Usage(),
 };
 
 static int Usage()
 {
-    Console.Error.WriteLine("Silo.PluginHost <plugin id> | --manifests <folder>");
+    Console.Error.WriteLine("Silo.PluginHost <plugin id> | --manifests <folder> | --sandbox-selftest");
     return 2;
 }
 
@@ -30,6 +33,7 @@ static int Manifests(string dir)
         new Silo.Plugins.Files.FolderSource().Manifest, new Silo.Plugins.Pdf.PdfFilter().Manifest, new Silo.Plugins.Office.OfficeFilter().Manifest,
         new Silo.Plugins.Image.ImageFilter().Manifest, new Silo.Plugins.Rocscience.RocscienceFilter().Manifest,
         new Silo.Plugins.Datamine.DatamineFilter().Manifest, new Silo.Plugins.AuGeo.AuGeoEnricher().Manifest,
+        new Silo.Plugins.Readers.ReadersFilter().Manifest,
     };
     foreach (var m in all)
     {
