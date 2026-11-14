@@ -11,11 +11,38 @@ const bytes = b => { if (b == null) return ""; const u = ["B", "KB", "MB", "GB",
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 const plural = (n, w, p) => num(n) + " " + (n === 1 ? w : (p || w + "s"));
 
+// Errors (0.1.7). Every failure the server reports carries a code from the Silo error registry:
+// {"error":{"code","message","severity","kb","traceId"}}. silo-errors.js (generated from the registry) holds the same
+// messages for failures that happen in the page itself, such as the server not answering.
+function siloError(code, args) {
+  const d = (window.SiloErrorTable || {})[code] || { m: "Something went wrong.", t: "Something went wrong" };
+  const plain = String(d.m).replace(/\{(\w+)\}/g, (_, k) => args && args[k] != null ? args[k] : "").replace(/\s{2,}/g, " ").trim();
+  const e = new Error(plain + " (" + code + ")");
+  e.code = code; e.plain = plain; e.title = d.t;
+  return e;
+}
+// The error in a failed response. A reply without a code (a proxy's page, an older server) still gets one.
+async function errorFrom(r) {
+  let j = null;
+  try { j = await r.json(); } catch (e) { }
+  const x = j && j.error;
+  let e;
+  if (x && typeof x === "object" && x.code) {
+    e = new Error(x.message + " (" + x.code + ")");
+    e.code = x.code; e.plain = x.message; e.kb = x.kb; e.ref = x.traceId; e.title = ((window.SiloErrorTable || {})[x.code] || {}).t;
+  }
+  else e = siloError(r.status === 401 ? "SILO-SRV-AUTH-0001" : "SILO-SRV-API-0007", { status: "HTTP " + r.status });
+  e.status = r.status;
+  return e;
+}
+
 async function api(path, body, method) {
   const opt = { method: method || (body ? "POST" : "GET"), headers: { "X-Silo": "1" } };
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
-  const r = await fetch("/api/v1" + path, opt);
-  if (!r.ok) { let m = r.statusText; try { const j = await r.json(); m = j.error || j.title || m; } catch (e) { } throw new Error(m); }
+  let r;
+  try { r = await fetch("/api/v1" + path, opt); }
+  catch (e) { throw siloError("SILO-SRV-API-0008"); }
+  if (!r.ok) throw await errorFrom(r);
   const ct = r.headers.get("content-type") || "";
   return ct.includes("json") ? r.json() : r.text();
 }
@@ -255,7 +282,7 @@ async function renderHome(st) {
   wireSearchBox($(".searchbox", app), q => go("/search", { q, filters: {}, page: 1 }));
   setTimeout(() => $(".searchbox input", app).focus(), 0);
   let o;
-  try { o = await api("/overview"); } catch (e) { $("#home-stats").textContent = "The server is starting…"; return; }
+  try { o = await api("/overview"); } catch (e) { $("#home-stats").textContent = e.message; return; }
   if (o.labels) LABELS = Object.assign(LABELS, o.labels);
   $("#home-stats").innerHTML = o.files
     ? `<b>${num(o.reports)}</b> reports · <b>${num(o.files)}</b> files indexed${o.geo ? ` · <b>${num((o.geo || []).filter(g => g.value !== "No location").reduce((a, g) => a + g.count, 0))}</b> on the map` : ""}
@@ -991,8 +1018,8 @@ async function adminStatus() {
     return `<tr><td><b>${esc(x.name)}</b><div class="muted mono" style="font-size:11.5px">${esc(x.id)}</div></td><td class="mono" style="font-size:12.5px">${esc(x.config?.root || "")}</td><td>${x.config?.access === "public" ? "Everyone" : "NTFS"}</td><td class="num">${num(x.count)}</td><td>${x.lastScan ? new Date(x.lastScan).toLocaleString() : "never"}</td><td><span class="status-dot ${bad ? "bad" : ""}"></span>${esc(x.status || "")}</td>
       <td style="white-space:nowrap"><button class="btn small" data-scan="${esc(x.id)}">Rescan</button> <button class="btn small danger" data-del="${esc(x.id)}">Remove</button></td></tr>`;
   }).join("");
-  $$("[data-scan]").forEach(b => b.onclick = async () => { await api("/admin/scan?source=" + encodeURIComponent(b.dataset.scan), {}); toast("Scanning"); });
-  $$("[data-del]").forEach(b => b.onclick = async () => { if (!confirm("Remove this source and its files from the index? The files themselves are not touched.")) return; await api("/admin/sources/" + encodeURIComponent(b.dataset.del), null, "DELETE"); adminStatus(); });
+  $$("[data-scan]").forEach(b => b.onclick = async () => { try { await api("/admin/scan?source=" + encodeURIComponent(b.dataset.scan), {}); toast("Scanning"); } catch (e) { toast(e.message, 5000); } });
+  $$("[data-del]").forEach(b => b.onclick = async () => { if (!confirm("Remove this source and its files from the index? The files themselves are not touched.")) return; try { await api("/admin/sources/" + encodeURIComponent(b.dataset.del), null, "DELETE"); adminStatus(); } catch (e) { toast(e.message, 5000); } });
   const types = (s.types || []).sort((a, b) => b.n - a.n);
   $("#types").innerHTML = `<tr><th>Type</th><th class="num">Files</th><th class="num">Size</th></tr>` + types.slice(0, 14).map(t => `<tr><td class="mono">${esc(t.ext || "(none)")}</td><td class="num">${num(t.n)}</td><td class="num">${bytes(t.bytes)}</td></tr>`).join("");
   $("#errors").innerHTML = (s.errors || []).length ? `<tr><th>File</th><th>Problem</th></tr>` + s.errors.slice(0, 12).map(e => `<tr><td style="max-width:220px;overflow-wrap:anywhere">${esc(e.name)}</td><td class="muted" style="font-size:12.5px">${esc(e.error)}</td></tr>`).join("") : `<tr><td class="muted">No problems.</td></tr>`;

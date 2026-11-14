@@ -21,7 +21,7 @@ return id switch
 
 static int Usage()
 {
-    Console.Error.WriteLine("Silo.PluginHost <plugin id> | --manifests <folder> | --sandbox-selftest");
+    Console.Error.WriteLine("Usage: Silo.PluginHost <plugin id> | --manifests <folder> | --sandbox-selftest (SILO-SRV-PLUG-0012)");
     return 2;
 }
 

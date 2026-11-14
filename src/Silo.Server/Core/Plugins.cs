@@ -1,3 +1,4 @@
+using Silo.Errors;
 using Silo.Isolation;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -67,7 +68,7 @@ public sealed class PluginProcess : IDisposable
             psi.Environment["TEMP"] = psi.Environment["TMP"] = psi.Environment["TMPDIR"] = _launch.Scratch;
         }
         else psi.Environment[Sandbox.EnvMode] = "0";
-        var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
+        var p = Process.Start(psi) ?? throw new SiloException(Err.Srv.Plug.PluginNotStarted, new { plugin = m.Id });
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
         // Every plugin, sandboxed or not, gets a job from outside: memory cap, no child programs, dies with the server.
         string? jobProblem = sandbox ? Sandbox.Contain(p, (long)_launch.MemoryMB * 1024 * 1024) : null;
@@ -80,11 +81,11 @@ public sealed class PluginProcess : IDisposable
         var hello = SendRaw("hello", null, TimeSpan.FromSeconds(30), null);
         var got = hello?.Deserialize<PluginManifest>(Contract.Json);
         if (got == null || got.Contract.Split('/').FirstOrDefault() != "silo.plugin" || got.Contract != Contract.Version)
-            throw new InvalidOperationException($"plugin {m.Id} speaks '{got?.Contract}', the core speaks '{Contract.Version}'");
+            throw new SiloException(Err.Srv.Plug.PluginContractMismatch, new { plugin = m.Id, speaks = got?.Contract, core = Contract.Version });
         var iso = !sandbox ? (m.Sandbox ? "off (turned off in settings)" : "off (the plugin asks to run without one)")
             : got.Isolation ?? "job only (the plugin does not sandbox itself)";
         if (jobProblem != null) iso += $"; outside job FAILED ({jobProblem})";
-        if (_info.Isolation != iso && (iso.Contains("FAILED") || iso.StartsWith("off"))) _log.Warn($"[{m.Id}] sandbox: {iso}");
+        if (_info.Isolation != iso && (iso.Contains("FAILED") || iso.StartsWith("off"))) _log.Problem(Err.Srv.Plug.PluginSandboxOff, new { plugin = m.Id, state = iso });
         _info.Isolation = iso;
     }
 
@@ -98,7 +99,7 @@ public sealed class PluginProcess : IDisposable
                 if (line.Length == 0) continue;
                 Reply? r;
                 try { r = JsonSerializer.Deserialize<Reply>(line, Contract.Json); }
-                catch { _log.Warn($"[{_info.Id}] wrote something that is not JSON: {Trunc(line)}"); continue; }
+                catch (Exception) { _log.Problem(Err.Srv.Plug.PluginBadOutput, new { plugin = _info.Id, wrote = Trunc(line) }); continue; }
                 if (r == null) continue;
                 if (r.Log != null) { _log.Info($"[{_info.Id}] {r.Msg}"); continue; }
                 if (r.Event != null && r.Id == null) { try { OnEvent?.Invoke(r); } catch { } continue; }
@@ -122,7 +123,7 @@ public sealed class PluginProcess : IDisposable
             Interlocked.Increment(ref _info.Calls);
             return SendRaw(op, args, timeout, onItem, ct);
         }
-        catch (TimeoutException) { Interlocked.Increment(ref _info.Timeouts); Interlocked.Increment(ref _info.Failures); Kill(); throw; }
+        catch (SiloException e) when (e.Error.Code == Err.Srv.Plug.PluginTookTooLong.Code) { Interlocked.Increment(ref _info.Timeouts); Interlocked.Increment(ref _info.Failures); Kill(); throw; }
         catch (PluginError) { Interlocked.Increment(ref _info.Failures); throw; }
         catch (Exception) { Interlocked.Increment(ref _info.Failures); Kill(); throw; }
         finally { _info.TotalMs += sw.Elapsed.TotalMilliseconds; _one.Release(); }
@@ -138,13 +139,13 @@ public sealed class PluginProcess : IDisposable
         while (true)
         {
             var left = deadline - DateTime.UtcNow;
-            if (left <= TimeSpan.Zero) throw new TimeoutException($"{_info.Id} took longer than {timeout.TotalSeconds:N0}s");
+            if (left <= TimeSpan.Zero) throw new SiloException(Err.Srv.Plug.PluginTookTooLong, new { plugin = _info.Id, seconds = timeout.TotalSeconds.ToString("N0") });
             if (!_replies.TryTake(out var r, (int)(left < TimeSpan.FromSeconds(1) ? left : TimeSpan.FromSeconds(1)).TotalMilliseconds, ct))
             {
-                if (!Running && _replies.Count == 0) throw new InvalidOperationException($"{_info.Id} stopped unexpectedly (exit code {SafeExit()})");
+                if (!Running && _replies.Count == 0) throw new SiloException(Err.Srv.Plug.PluginStopped, new { plugin = _info.Id, exit = SafeExit() });
                 continue;
             }
-            if (r.Id == -1) throw new InvalidOperationException($"{_info.Id} stopped unexpectedly (exit code {SafeExit()})");
+            if (r.Id == -1) throw new SiloException(Err.Srv.Plug.PluginStopped, new { plugin = _info.Id, exit = SafeExit() });
             if (r.Id != id) continue;   // a late reply to a request that already timed out
             if (r.Item != null) { onItem?.Invoke(r.Item); deadline = DateTime.UtcNow + timeout; continue; }
             if (r.Ok == true) return r.Result;
@@ -228,7 +229,7 @@ public sealed class PluginManager : IDisposable
         if (sandbox)
         {
             try { Sandbox.PrepareScratch(scratch); }
-            catch (Exception e) { log.Warn("The plugins' scratch folder could not be set up, so some files may fail to read: " + e.Message); }
+            catch (Exception e) { log.Problem(Err.Srv.Plug.PluginScratchNotReady, new { detail = SafeText.Detail(e) }, e); }
         }
         _launch = new PluginLaunch(settings.BinDir, sandbox, Math.Max(256, settings.Current.PluginMemoryMB), scratch);
         Discover();
@@ -248,18 +249,18 @@ public sealed class PluginManager : IDisposable
                     // A plugin is a program the service runs. Outside the install folder it must have been put there by an administrator.
                     if (root != builtIn && !DataFolder.TrustedPlugin(Path.GetDirectoryName(mf)!, out var why))
                     {
-                        _log.Warn($"Plugin in {Path.GetDirectoryName(mf)} not loaded: {why}. An administrator must copy it there.");
+                        _log.Problem(Err.Srv.Plug.PluginNotTrusted, new { folder = Path.GetDirectoryName(mf), reason = why });
                         continue;
                     }
                     var m = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(mf), Contract.Json)!;
                     if (string.IsNullOrWhiteSpace(m.Id)) continue;
                     var info = new PluginInfo { Manifest = m, Dir = Path.GetDirectoryName(mf)! };
-                    if (m.Contract != Contract.Version) info.Problem = $"needs contract {m.Contract}; this core speaks {Contract.Version}";
+                    if (m.Contract != Contract.Version) info.Problem = Fail.Text(Err.Srv.Plug.PluginNeedsOtherContract, new { needs = m.Contract, speaks = Contract.Version });
                     info.Enabled = info.Problem == null && !_settings.Current.DisabledPlugins.Contains(m.Id);
                     m.Extensions = m.Extensions.Select(e => e.ToLowerInvariant()).ToList();
                     found[m.Id] = info;   // later folders override built-ins with the same id
                 }
-                catch (Exception e) { _log.Warn($"Bad plugin manifest {mf}: {e.Message}"); }
+                catch (Exception e) { _log.Problem(Err.Srv.Plug.PluginManifestBad, new { file = mf, detail = SafeText.Detail(e) }, e); }
             }
         All = found.Values.OrderBy(p => p.Manifest.Kind).ThenBy(p => p.Manifest.Name).ToList();
     }

@@ -127,6 +127,16 @@ A plugin can be written in any language that reads and writes JSON lines. A filt
 
 The web page uses only these endpoints, so an MCP server or other tools can sit on the same API.
 
+### Errors (new in 0.1.7)
+
+Every failure carries a code from the Silo error registry, such as `SILO-SRV-SRC-0002`. The API answers a failure with one shape, and the HTTP status that fits it:
+
+```json
+{"error":{"code":"SILO-SRV-API-0005","message":"That item isn't available. It may have been removed, or you may not have access to it.","severity":"error","kb":"kb-srv-api-0005","traceId":null}}
+```
+
+The admin page and the log show the same message followed by its code. The log line (`C:\ProgramData\SiloServer\logs`) starts with the message and then holds the technical detail: the code, the values behind the message and the exception. An unexpected error is `SILO-SRV-GEN-9999` with a reference that finds its log line. The service exits with 1 (another copy running), 2 (port in use) or 3 (settings unreadable with no backup, or the data folder could not be locked); the reason, with its code, is the last line of the log.
+
 ## Settings
 
 Settings live in `C:\ProgramData\SiloServer\settings.json`. You can also change them on the admin page.

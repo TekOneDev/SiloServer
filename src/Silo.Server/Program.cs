@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
@@ -16,11 +17,15 @@ if (args.Length > 0 && args[0] == "init") { var s0 = new SettingsStore(); Consol
 using var single = new Mutex(false, OperatingSystem.IsWindows() ? @"Global\SiloServer" : "SiloServer");
 bool owned;
 try { owned = single.WaitOne(TimeSpan.FromSeconds(30)); } catch (AbandonedMutexException) { owned = true; }
-if (!owned) return 1;
+if (!owned) { Fail.Write(Err.Srv.Svc.AnotherCopyRunning); return 1; }
 
-var settings = new SettingsStore();
+SettingsStore settings;
+// A start-up failure with a code of its own (settings.json unreadable with no backup) stops the service: exit code 3.
+try { settings = new SettingsStore(); }
+catch (SiloException e) { Fail.Write(e.Error, e.Args, e.InnerException); Log.Emergency(e.Error, e.Args, e.InnerException); return 3; }
 var log = new Log(settings.DataDir);
-if (settings.LoadProblem != null) log.Error(settings.LoadProblem);
+Fail.Use(log);
+if (settings.LoadFault is { } lf) log.Problem(lf.Def, lf.Args, lf.Cause);
 log.Info($"Silo Server {typeof(Program).Assembly.GetName().Version?.ToString(3)} starting; data in {settings.DataDir}");
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -57,21 +62,22 @@ if (windowsAuth)
 builder.Services.AddResponseCompression(o => o.EnableForHttps = true);
 
 // Only SYSTEM and Administrators may write where the service keeps settings, plugins and the index (0.1.4).
-DataFolder.Lock(settings, log);
+try { DataFolder.Lock(settings, log); }
+catch (SiloException e) { log.Problem(e.Error, e.Args, e.InnerException); return 3; }
 // ...and the sandboxed plugins and OCR workers may not read it at all (0.1.5).
 if (settings.Current.SandboxPlugins) DataFolder.ProtectFromPlugins(settings, log);
 log.Info($"Running as {DataFolder.RunningAs()}; plugins {(settings.Current.SandboxPlugins ? "sandboxed" : "NOT sandboxed (sandboxPlugins is off)")}; HTTPS {https.Status}.");
 if (DataFolder.IsLocalSystem())
-    log.Warn("Silo Server runs as LocalSystem, the most powerful account on this computer. Run the installer again to move it to its own account (NT SERVICE\\SiloServer, or a domain account with -Account).");
+    log.Problem(Err.Srv.Svc.RunsAsLocalSystem);
 if (settings.Current.Auth == "anonymous" && settings.Current.Listen.Any(u => !ApiRoutes.IsLoopbackUrl(u)) &&
     settings.Current.Sources.Any(s => !string.Equals(s.Config["access"]?.GetValue<string>(), "public", StringComparison.OrdinalIgnoreCase)))
-    log.Warn("This server listens on the network without sign-in. Only files of sources marked public, or readable by Everyone, are shown. Set auth to \"windows\" before adding private sources.");
+    log.Problem(Err.Srv.Svc.NetworkWithoutSignIn);
 
 var catalog = new Catalog(Path.Combine(settings.DataDir, "catalog.db"));
 var plugins = new PluginManager(settings, log);
 var rules = new Rules(settings, log, catalog);
 var index = new SearchIndex(Path.Combine(settings.DataDir, "index"));
-if (index.Recovered != null) log.Error($"The search index could not be opened ({index.Recovered}). It was started again from empty and is being rebuilt from the catalog; searches fill in as it goes.");
+if (index.Recovered != null) log.Problem(Err.Srv.Idx.IndexRebuiltFromEmpty, new { reason = index.Recovered });
 var engine = new Engine(settings, catalog, plugins, rules, index, log);
 var searcher = new Searcher(index, rules, () => engine.IndexBuilding)
 {
@@ -83,6 +89,8 @@ builder.Services.AddSingleton(settings).AddSingleton(log).AddSingleton(catalog).
     .AddSingleton(index).AddSingleton(searcher).AddSingleton(engine).AddSingleton(https).AddHostedService(sp => sp.GetRequiredService<Engine>());
 
 var app = builder.Build();
+// Outermost: whatever goes wrong below, an API client gets the coded error body.
+app.Use(Fail.Middleware);
 app.UseResponseCompression();
 if (https.HttpsPort != null && settings.Current.HttpsRedirect)
     app.Use(async (http, next) =>
@@ -114,6 +122,8 @@ app.UseStaticFiles(new StaticFileOptions
     OnPrepareResponse = c => c.Context.Response.Headers["Cache-Control"] = c.File.Name.EndsWith(".html") || c.File.Name.EndsWith(".js") || c.File.Name.EndsWith(".css") ? "no-cache" : "public, max-age=3600",
 });
 ApiRoutes.Map(app);
+// An API address that does not exist is an error with a code, not the search page.
+app.MapFallback("/api/{**rest}", () => Fail.Result(Err.Srv.Api.NoSuchEndpoint));
 app.MapFallbackToFile("index.html");
 
 app.Lifetime.ApplicationStopped.Register(() =>
@@ -126,5 +136,5 @@ app.Lifetime.ApplicationStopped.Register(() =>
 });
 try { app.Run(); }
 catch (OperationCanceledException) { }
-catch (IOException e) when (e.Message.Contains("address", StringComparison.OrdinalIgnoreCase)) { log.Error("Could not listen: " + e.Message); return 2; }
+catch (IOException e) when (e.Message.Contains("address", StringComparison.OrdinalIgnoreCase)) { log.Problem(Err.Srv.Svc.PortInUse, new { detail = SafeText.Detail(e) }, e); return 2; }
 return 0;
