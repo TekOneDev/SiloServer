@@ -14,6 +14,7 @@
     <ProjectReference Include="..\..\src\Silo.Plugin.Office\Silo.Plugin.Office.csproj" />
     <ProjectReference Include="..\..\src\Silo.Plugin.Datamine\Silo.Plugin.Datamine.csproj" />
     <ProjectReference Include="..\..\src\Silo.Plugin.Readers\Silo.Plugin.Readers.csproj" />
+    <ProjectReference Include="..\..\src\Silo.Plugin.Vault\Silo.Plugin.Vault.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="data\**" CopyToOutputDirectory="PreserveNewest" />

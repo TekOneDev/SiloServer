@@ -16,5 +16,6 @@
     <ProjectReference Include="../Silo.Plugin.Datamine/Silo.Plugin.Datamine.csproj" />
     <ProjectReference Include="../Silo.Plugin.Geo/Silo.Plugin.Geo.csproj" />
     <ProjectReference Include="../Silo.Plugin.Readers/Silo.Plugin.Readers.csproj" />
+    <ProjectReference Include="../Silo.Plugin.Vault/Silo.Plugin.Vault.csproj" />
   </ItemGroup>
 </Project>

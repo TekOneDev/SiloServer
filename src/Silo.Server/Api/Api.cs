@@ -143,12 +143,28 @@ public static class ApiRoutes
 
         var types = new FileExtensionContentTypeProvider();
         types.Mappings[".rs3compute"] = "text/plain"; types.Mappings[".las"] = "text/plain"; types.Mappings[".log"] = "text/plain";
-        api.MapGet("/items/{id:long}/file", (HttpContext http, long id, Searcher s, Catalog cat) =>
+        api.MapGet("/items/{id:long}/file", (HttpContext http, long id, Searcher s, Catalog cat, Engine engine) =>
         {
             var hit = s.Get(id, Who(http, settings));
             if (hit == null) return Results.NotFound();
             var row = cat.Load(id);
-            if (row?.Path == null || !File.Exists(row.Path)) return Results.NotFound("The file is not reachable from the server right now.");
+            if (row == null) return Results.NotFound();
+            // A file kept by its source (Autodesk Vault): fetch a fresh copy for this one download, then delete it (0.1.7).
+            if (row.Path == null)
+            {
+                string? copy;
+                try { copy = engine.FetchCopy(row, http.RequestAborted); }
+                catch (Exception e) when (e is not OperationCanceledException) { return Results.Problem("The source could not hand over the file: " + e.Message, statusCode: 502); }
+                if (copy == null) return Results.NotFound("This item has no file the server can show.");
+                http.Response.RegisterForDispose(new Cleanup(() => engine.DropCopy(copy)));
+                if (!types.TryGetContentType(row.Name, out var fct)) fct = "application/octet-stream";
+                var (ftype, finline) = Delivery(fct, Path.GetExtension(row.Name));
+                if (ftype == "application/pdf") http.Response.Headers.Remove("Content-Security-Policy");
+                else http.Response.Headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
+                var fs = new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, FileOptions.Asynchronous);
+                return Results.File(fs, ftype, finline ? null : row.Name, enableRangeProcessing: true);
+            }
+            if (!File.Exists(row.Path)) return Results.NotFound("The file is not reachable from the server right now.");
             if (!types.TryGetContentType(row.Path, out var ct)) ct = "application/octet-stream";
             var (type, inline) = Delivery(ct, Path.GetExtension(row.Path));
             // Whatever the file is, it is never a page of ours: no script, no forms, no requests. (PDFs carry no policy: the browser's own viewer must run, and a PDF cannot script this site.)
@@ -196,4 +212,10 @@ public static class ApiRoutes
         foreach (var (k, v) in pm.DeclaredFields()) if (v.spec.Facet) d[k] = v.spec.Label;
         return d;
     }
+}
+
+/// <summary>Runs an action when the response is finished with (deletes a fetched copy).</summary>
+sealed class Cleanup(Action run) : IDisposable
+{
+    public void Dispose() { try { run(); } catch { } }
 }

@@ -288,6 +288,9 @@ public sealed class PluginManager : IDisposable
 
     public PluginProcess Process(PluginInfo info) => new(info, _launch, _log);
 
+    /// <summary>The plugins' scratch folder: the only place a sandboxed plugin can write.</summary>
+    public string Scratch => _launch.Scratch;
+
     /// <summary>Every field a plugin declares, by stored name ("x.{name}").</summary>
     public Dictionary<string, (FieldSpec spec, string plugin)> DeclaredFields()
     {

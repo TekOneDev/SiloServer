@@ -272,7 +272,7 @@ public sealed class SearchIndex : IDisposable
             ["ten"] = d.Tenements.Take(12).ToList(), ["lith"] = d.Lithology.Take(6).ToList(), ["method"] = d.Methods.Take(6).ToList(), ["state"] = d.State,
             ["size"] = it.Size, ["pages"] = it.Pages, ["ocr"] = it.OcrPages, ["mod"] = it.Modified,
             ["lat"] = d.Geo?.Lat, ["lon"] = d.Geo?.Lon, ["bbox"] = d.Geo?.Bbox, ["geo"] = d.Geo?.Basis, ["raw"] = d.Geo?.Raw,
-            ["licence"] = it.M("licence"), ["attr"] = it.M("attribution"), ["landing"] = it.M("landing_page") ?? it.Url, ["summary"] = it.Summary,
+            ["licence"] = it.M("licence"), ["attr"] = it.M("attribution"), ["landing"] = it.M("landing_page") ?? it.Url, ["landingLabel"] = it.M("landing_label"), ["summary"] = it.Summary,
             ["fields"] = shown, ["path"] = it.Path, ["loc"] = it.Location, ["src"] = it.SourceId, ["state_"] = it.State, ["err"] = it.Error,
             ["asx"] = d.Lookup.GetValueOrDefault("asx_code")?.Where(a => a.Length > 0).Distinct().ToList(),
             ["owner"] = (d.Lookup.GetValueOrDefault("company_now") ?? d.Lookup.GetValueOrDefault("company_listed"))?.Distinct().ToList(),

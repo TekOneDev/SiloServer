@@ -1,10 +1,10 @@
-# Silo Server 0.1.6 (beta)
+# Silo Server 0.1.7 (beta)
 
 A search service for mining data: exploration reports, drilling data, and technical files from packages such as Datamine and Rocscience. It runs as a Windows service. You use it through a Google-style web page at **http://localhost:47820/**.
 
 ## Install
 
-1. Unzip `Silo-Server-0.1.6-win-x64.zip`.
+1. Unzip `Silo-Server-0.1.7-win-x64.zip`.
 2. Double-click **Install Silo Server.cmd**. Windows asks for administrator permission once.
 3. When it finishes, the search page opens. Indexing starts straight away. Watch progress at **http://localhost:47820/admin**.
 
@@ -100,12 +100,13 @@ Built in:
 | Plugin | Handles |
 |---|---|
 | `silo.source.folder` | Folders and shares. Reads sidecars (`item.json`), NTFS ACLs, and live change watching |
+| `silo.source.vault` | Autodesk Vault (0.1.7): files with Vault paths, properties, revisions and lifecycle states, with Vault permissions. See Autodesk Vault below |
 | `silo.filter.pdf` | PDF text by page. Scanned pages go to OCR |
 | `silo.filter.office` | Word, Excel, PowerPoint, HTML, RTF, CSV and text files (LAS, XML, JSON…). Recognises drillhole collars, assays, lithology logs and surveys in tables |
 | `silo.filter.image` | Photos and scans: EXIF/IPTC, GPS location. OCR |
 | `silo.filter.datamine` | Datamine `.dm`/`.dmx`: file type, fields, record count, block size, model extents |
 | `silo.filter.rocscience` | RS3 compute, model database, results and engine logs: materials, stages, strength models |
-| `silo.filter.readers` | The types Silo Desktop reads, from the shared SiloCommon readers (0.1.6): Word/Excel/PowerPoint 97-2003, OpenDocument, `.eml`/`.msg`, zip listings, DWG/DXF/DGN/STEP drawings, 3D print and mesh files, Datamine projects and `.dmx`, Leapfrog, Slide/RS2, OMF and Surfer grids. Facets: software, model type, has results |
+| `silo.filter.readers` | The types Silo Desktop reads, from the shared SiloCommon readers (0.1.6): Word/Excel/PowerPoint 97-2003, OpenDocument, `.eml`/`.msg`, zip listings, DWG/DXF/DGN/STEP drawings, Inventor `.ipt`/`.iam`/`.idw`/`.ipn` iProperties and files used (0.1.7), 3D print and mesh files, Datamine projects and `.dmx`, Leapfrog, Slide/RS2, OMF and Surfer grids. Facets: software, model type, has results |
 | `silo.enrich.au-geo` | Report footprints from WA (DEMIRS SLIP) and QLD (GSQ open data) |
 
 To add one:
@@ -115,6 +116,31 @@ To add one:
 3. Drop the folder into `C:\ProgramData\SiloServer\plugins\<id>\` with a `plugin.json`.
 
 A plugin can be written in any language that reads and writes JSON lines. A filter declares `fields` in its manifest, and those fields become facets and `x.<name>:` search operators automatically. A filter whose version changes causes the files it handles to be re-read.
+
+## Autodesk Vault (0.1.7)
+
+Vault keeps files under numbered names in its filestore, with the real names, folders, properties and permissions in its database, so Silo reads Vault through Vault's own web services rather than the share. It works with Vault Basic, Workgroup and Professional, ships no Autodesk code, and only reads: it signs in read-only and never checks out, changes or deletes anything.
+
+1. Make a Vault user for Silo, such as `silo-indexer`, that can read every folder (the Administrator role is simplest; Silo only reads).
+2. Check the Vault first: `Silo.PluginHost.exe --vault-probe http://vaultserver Vault silo-indexer` (add `--windows` to sign in as the current Windows account). It asks for the password, looks at a sample of folders, files, properties and permissions, downloads one small file, and writes `vault-probe.txt`. It changes nothing.
+3. On the admin page, **Add Autodesk Vault** with the server address, vault name and account. A full pass runs every 30 minutes; only files with a new version are read again.
+
+What you get:
+
+- Each file once, at its latest released version (or its latest version when it was never released, or always with `"version": "latest"`; `"unreleased": "skip"` leaves never-released files out). Files with no lifecycle at all (Vault Basic) are always listed.
+- The Vault path on the card (**Copy Vault path**), and **Open in Vault**, which opens it in Vault Explorer (`"openUrl"` takes a template with `{server}`, `{vault}`, `{path}`, `{pathEncoded}`, `{masterId}`, `{fileId}` for the web client or anything else).
+- Facets and `x.` operators: `x.vault_part:`, `x.vault_rev:`, `x.vault_state:`, `x.vault_category:`, `x.vault_folder:`, `x.vault_by:`, `x.vault_project:`. Every other Vault property is searchable text.
+- The text inside each file, read by the normal filters. Silo fetches a copy into the plugins' scratch folder, reads it and deletes it. Downloads from the preview pane work the same way. Scanned pages in Vault PDFs are not OCR'd yet.
+
+Permissions follow Vault and fail closed:
+
+- Read = Allow on a file's or folder's ACL becomes that user's or group's Windows SID; Read = Deny goes to the deny list, which always wins.
+- Vault users and groups that came from Active Directory map to their AD SIDs. Vault-only groups are expanded to their members. Vault-only users get no access unless `"userMap": { "vaultname": "DOMAIN\\winname" }` names their Windows account (`"matchByName": true` tries the same name in `"domain"`).
+- A file with no ACL anywhere (Vault's default) is visible to every active Vault user with a Windows account, or to the group named in `"everyone"`.
+- When a lifecycle state has its own security, a user needs Read from both the folder and the state. If Silo cannot read the state's security the file is hidden (`"stateSecurity": "ignore"` uses folder security alone).
+- Accounts that could not be mapped are listed in the log after each scan.
+
+Other settings: `"root"` (a Vault folder such as `$/Designs`), `"exclude"` (patterns on Vault paths and names), `"windowsAuth"`, `"serviceVersion"` (found automatically), `"aclEntity"` (`master`, or `file`), `"readPermissionId"` (1). The password is kept in `settings.json` on the server, which only the service and administrators can read, and the admin page never shows it.
 
 ## API
 
@@ -154,3 +180,4 @@ Run `./build.sh` with the .NET 10 SDK. It runs the tests, publishes the server a
 - A share on another server needs the service's account to be able to read it (see The service account). Change the account by running the installer again with `-Account`.
 - The service account, HTTPS and the sandbox (0.1.5) have passed the Windows CI checks but not yet a real server install.
 - Semantic (meaning-based) search is designed in as a hook, but it is not built yet.
+- The Vault source (0.1.7) is built from Autodesk's published API names and tested against a pretend Vault, not yet a real one. Run `--vault-probe` on a new Vault and send the report if anything looks wrong.
