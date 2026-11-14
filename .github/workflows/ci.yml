@@ -11,9 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # common/ is TekOneDev/SiloCommon (private): a read-only token for it is stored as SILOCOMMON_TOKEN.
-          submodules: true
-          token: ${{ secrets.SILOCOMMON_TOKEN }}
+          persist-credentials: false
+      - name: Check out common/ (TekOneDev/SiloCommon)
+        # SiloCommon is private: SILOCOMMON_TOKEN is a read-only token for that repo only,
+        # so it is used just for the submodule, not for this repository.
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.SILOCOMMON_TOKEN }}
+        run: |
+          git -c url."https://x-access-token:${TOKEN}@github.com/TekOneDev/SiloCommon".insteadOf=https://github.com/TekOneDev/SiloCommon \
+              submodule update --init --depth 1 common
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
