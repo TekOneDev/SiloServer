@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -94,7 +95,7 @@ public sealed class Engine : BackgroundService
         {
             try { await body(stop); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
-            catch (Exception e) { _log.Error($"{name} loop: {e.GetType().Name}: {e.Message}"); try { await Task.Delay(5000, stop); } catch { return; } }
+            catch (Exception e) { _log.Problem(Err.Srv.Idx.BackgroundLoopFault, new { loop = name, detail = SafeText.Detail(e) }, e); try { await Task.Delay(5000, stop); } catch { return; } }
         }
     }, stop);
 
@@ -164,7 +165,7 @@ public sealed class Engine : BackgroundService
     void Scan(SourceConfig src, CancellationToken stop, string? subpath = null)
     {
         var info = _plugins.Get(src.Plugin);
-        if (info == null || !info.Enabled) { _cat.SourceStatus(src.Id, $"plugin {src.Plugin} not available"); return; }
+        if (info == null || !info.Enabled) { _cat.SourceStatus(src.Id, Fail.Text(Err.Srv.Src.SourcePluginUnavailable, new { plugin = src.Plugin })); return; }
         _scanLock.Wait(stop);
         try
         {
@@ -190,9 +191,10 @@ public sealed class Engine : BackgroundService
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            _cat.SourceStatus(src.Id, "error: " + e.Message);
+            // "error: " stays in front: the admin page shows a source in red by it.
+            var (def, a) = PluginFaults.OfScan(e, src.Name);
+            _cat.SourceStatus(src.Id, "error: " + _log.Problem(def, a, e is SiloException s ? s.InnerException : e));
             _scanRetry[src.Id] = DateTime.UtcNow.AddMinutes(5);
-            _log.Warn($"{src.Name}: scan failed (retrying in 5 minutes): {e.Message}");
         }
         finally { Stats.Activity.TryRemove("scan", out _); _scanLock.Release(); }
     }
@@ -265,7 +267,7 @@ public sealed class Engine : BackgroundService
                 _ = Task.Run(() =>
                 {
                     try { Extract(id, stop); }
-                    catch (Exception e) when (e is not OperationCanceledException) { _cat.SetState(id, ItemState.Failed, e.Message); }
+                    catch (Exception e) when (e is not OperationCanceledException) { _cat.SetState(id, ItemState.Failed, PluginFaults.OfExtract(e)); }
                     finally { _inflight.TryRemove(id, out _); slots.Release(); }
                 }, stop);
             }
@@ -283,7 +285,7 @@ public sealed class Engine : BackgroundService
         var filter = _plugins.FilterFor(it.Name, it.Ext);
         if (filter == null) { _cat.SaveExtract(id, ItemState.MetadataOnly, null, null, null, null, 0, null); return; }
         var m = filter.Manifest;
-        if (it.Size > m.MaxFileMB * 1024L * 1024L) { _cat.SaveExtract(id, ItemState.MetadataOnly, filter.Id + "@" + m.Version, null, null, $"larger than {m.MaxFileMB:N0} MB: name and details only", 0, null); return; }
+        if (it.Size > m.MaxFileMB * 1024L * 1024L) { _cat.SaveExtract(id, ItemState.MetadataOnly, filter.Id + "@" + m.Version, null, null, Fail.Text(Err.Srv.Idx.FileOverSizeLimit, new { limit = m.MaxFileMB.ToString("N0") }), 0, null); return; }
         var pool = _plugins.Pool(filter, _settings.ExtractWorkers);
         var timeout = TimeSpan.FromSeconds(Math.Min(3600, m.TimeoutSec + (m.ReadsInPlace ? 0 : it.Size / 1_000_000.0 * 2)));
         var sw = Stopwatch.StartNew();
@@ -293,11 +295,11 @@ public sealed class Engine : BackgroundService
             var args = new JsonObject { ["path"] = it.Path, ["ext"] = it.Ext ?? "", ["size"] = it.Size, ["maxPages"] = 5000, ["maxChars"] = 30_000_000 };
             x = pool.Call("extract", args, timeout, stop)?.Deserialize<ExtractResult>(Contract.Json);
         }
-        catch (Exception e) when (e is not OperationCanceledException) { error = e.Message; }
+        catch (Exception e) when (e is not OperationCanceledException) { error = PluginFaults.OfExtract(e); }
         Interlocked.Increment(ref Stats.Extracted);
         lock (Stats) Stats.ExtractMs += sw.Elapsed.TotalMilliseconds;
         var tag = filter.Id + "@" + m.Version;
-        if (x == null) { Interlocked.Increment(ref Stats.ExtractFailed); _cat.SaveExtract(id, ItemState.Failed, tag, null, null, error ?? "no result", 0, null); return; }
+        if (x == null) { Interlocked.Increment(ref Stats.ExtractFailed); _cat.SaveExtract(id, ItemState.Failed, tag, null, null, error ?? Fail.Text(Err.Srv.Idx.NoTextReturned), 0, null); return; }
         var pages = x.Pages;
         int ocrWanted = x.OcrImage ? 1 : Math.Min(pages.Count(p => p.NeedsOcr), _settings.Current.MaxOcrPagesPerFile);
         bool ocr = ocrWanted > 0 && OcrAvailable && _settings.Current.Ocr;
@@ -360,7 +362,7 @@ public sealed class Engine : BackgroundService
             if (text.Length > p.Text.Length) { p.Text = text; p.Ocr = true; }
         }
         pages = pages.OrderBy(p => p.N).ToList();
-        _cat.SaveOcr(id, pages, TextHash(pages), reply.Error);
+        _cat.SaveOcr(id, pages, TextHash(pages), PluginFaults.OfOcr(reply.Error));
     }
 
     // ---------- enrich ----------
@@ -381,7 +383,7 @@ public sealed class Engine : BackgroundService
                     var args = new JsonObject { ["targets"] = JsonSerializer.SerializeToNode(todo.Select(t => new EnrichTarget { Dataset = t.dataset, Collection = t.collection, Meta = t.meta }).ToList(), Contract.Json) };
                     EnrichResult? res = null;
                     try { res = _plugins.Pool(p, 2).Call("enrich", args, TimeSpan.FromSeconds(p.Manifest.TimeoutSec), stop)?.Deserialize<EnrichResult>(Contract.Json); }
-                    catch (Exception e) when (e is not OperationCanceledException) { _log.Warn($"{p.Manifest.Name}: {e.Message}"); }
+                    catch (Exception e) when (e is not OperationCanceledException) { _log.Problem(Err.Srv.Plug.EnrichFailed, new { plugin = p.Manifest.Name, detail = SafeText.Detail(e) }, e); }
                     var answered = new HashSet<(string, string)>();
                     foreach (var o in res?.Items ?? new())
                     {
@@ -453,7 +455,7 @@ public sealed class Engine : BackgroundService
         finally
         {
             // A clean stop saves what is in the writers, so the next start has nothing to redo.
-            if (sinceCommit > 0) try { CommitIndex(); } catch (Exception e) { _log.Warn("index commit on stop: " + e.Message); }
+            if (sinceCommit > 0) try { CommitIndex(); } catch (Exception e) { _log.Problem(Err.Srv.Idx.IndexCommitOnStopFailed, new { detail = SafeText.Detail(e) }, e); }
         }
     }
 
@@ -475,7 +477,7 @@ public sealed class Engine : BackgroundService
                 _index.Put(new SearchIndex.Input(row, d, pages, declared));
                 Interlocked.Increment(ref Stats.Indexed);
             }
-            catch (Exception e) { _log.Warn($"index {row.Name}: {e.Message}"); }
+            catch (Exception e) { _log.Problem(Err.Srv.Idx.ItemNotIndexed, new { name = row.Name, detail = SafeText.Detail(e) }, e); }
         });
     }
 

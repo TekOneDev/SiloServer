@@ -48,7 +48,7 @@ static class SandboxTest
             if (err.Length > 0) Console.Error.Write(err);
             Console.WriteLine(job == null ? "PASS  the server put the plugin in a job of its own" : $"FAIL  outside job: {job}");
             bool ok = p.ExitCode == 0 && job == null;
-            Console.WriteLine(ok ? "Sandbox self-test passed." : "Sandbox self-test FAILED.");
+            Console.WriteLine(ok ? "Sandbox self-test passed." : "Sandbox self-test FAILED. (SILO-SRV-PLUG-0013)");
             return ok ? 0 : 1;
         }
         finally

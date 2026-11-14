@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
@@ -126,7 +127,7 @@ public static class OcrEngine
 #else
     public static string? Check() => "only available in the Windows build";
     public static string Language => "";
-    public static OcrReply Run(OcrJob job) => new() { Error = "OCR is only available in the Windows build" };
+    public static OcrReply Run(OcrJob job) => new() { Error = Fail.Text(Err.Srv.Ocr.OcrNotAvailable) };
 #endif
 
     /// <summary>Share of tokens that look like real words (letters with a vowel, or numbers). Sideways scans score low.</summary>
@@ -200,7 +201,7 @@ public sealed class OcrPool : IDisposable
         if (_low && _scratch != null) psi.Environment["TEMP"] = psi.Environment["TMP"] = _scratch;
         var p = Process.Start(psi)!;
         var problem = Silo.Isolation.Sandbox.Contain(p, (long)_memoryMB * 1024 * 1024);
-        if (problem != null) _log.Warn("OCR worker job could not be set up: " + problem);
+        if (problem != null) _log.Problem(Err.Srv.Ocr.OcrJobNotSetUp, new { reason = problem });
         p.ErrorDataReceived += (_, _) => { };
         p.BeginErrorReadLine();
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
@@ -217,18 +218,18 @@ public sealed class OcrPool : IDisposable
             p.StandardInput.WriteLine(JsonSerializer.Serialize(job, Silo.Plugins.Contract.Json));
             p.StandardInput.Flush();
             var read = p.StandardOutput.ReadLineAsync(ct).AsTask();
-            if (!read.Wait(timeout, ct)) { Kill(p); p = null; return new OcrReply { Error = $"OCR timed out after {timeout.TotalSeconds:N0}s" }; }
-            if (read.Result == null) { Kill(p); p = null; return new OcrReply { Error = "OCR worker crashed (damaged file?)" }; }
-            var reply = JsonSerializer.Deserialize<OcrReply>(read.Result, Silo.Plugins.Contract.Json) ?? new OcrReply { Error = "bad reply" };
+            if (!read.Wait(timeout, ct)) { Kill(p); p = null; return new OcrReply { Error = Fail.Text(Err.Srv.Ocr.OcrTimedOut, new { seconds = timeout.TotalSeconds.ToString("N0") }) }; }
+            if (read.Result == null) { Kill(p); p = null; return new OcrReply { Error = Fail.Text(Err.Srv.Ocr.OcrWorkerCrashed) }; }
+            var reply = JsonSerializer.Deserialize<OcrReply>(read.Result, Silo.Plugins.Contract.Json) ?? new OcrReply { Error = Fail.Text(Err.Srv.Ocr.OcrBadReply) };
             if (reply.Isolation != null && reply.Isolation != Isolation)
             {
-                if (reply.Isolation.Contains("FAILED")) _log.Warn("OCR worker sandbox: " + reply.Isolation);
+                if (reply.Isolation.Contains("FAILED")) _log.Problem(Err.Srv.Ocr.OcrSandboxFailed, new { state = reply.Isolation });
                 Isolation = reply.Isolation;
             }
             return reply;
         }
         catch (OperationCanceledException) { if (p != null) Kill(p); p = null; throw; }
-        catch (Exception e) { if (p != null) Kill(p); p = null; return new OcrReply { Error = e.Message }; }
+        catch (Exception e) { if (p != null) Kill(p); p = null; return new OcrReply { Error = _log.Problem(Err.Srv.Ocr.OcrFailed, new { detail = SafeText.Detail(e) }, e) }; }
         finally { if (p != null) _idle.Add(p); _slots.Release(); }
     }
 

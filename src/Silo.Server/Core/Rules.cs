@@ -1,3 +1,4 @@
+using Silo.Errors;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -88,7 +89,7 @@ public sealed class Rules
             f = JsonSerializer.Deserialize<RulesFile>(text, new JsonSerializerOptions { PropertyNameCaseInsensitive = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) ?? new();
             Fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(text)))[..12];
         }
-        catch (Exception e) { _log.Error($"rules.json could not be read ({e.Message}); using no rules"); f = new(); }
+        catch (Exception e) { _log.Problem(Err.Srv.Cfg.RulesUnreadable, new { detail = SafeText.Detail(e) }, e); f = new(); }
         File = f;
         var alias = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var text1 = new List<(string, Regex)>();
@@ -329,7 +330,8 @@ public sealed class CsvLookups
                     _log.Info($"Lookup {System.IO.Path.GetFileName(path)}: {nt.Rows.Count:N0} collections");
                 }
                 catch (IOException) { /* being rewritten: next check */ }
-                catch (Exception e) { _log.Warn($"Lookup {path}: {e.Message}"); }
+                catch (SiloException e) { _log.Problem(e.Error, e.Args, e.InnerException); }
+                catch (Exception e) { _log.Problem(Err.Srv.Cfg.LookupNotLoaded, new { file = System.IO.Path.GetFileName(path), detail = SafeText.Detail(e) }, e); }
             }
         }
     }
@@ -356,7 +358,7 @@ public sealed class CsvLookups
         var head = Split(r.ReadLine() ?? "");
         int di = head.FindIndex(h => h.Equals(lk.DatasetColumn, StringComparison.OrdinalIgnoreCase));
         int ci = head.FindIndex(h => h.Equals(lk.CollectionColumn, StringComparison.OrdinalIgnoreCase));
-        if (ci < 0) throw new InvalidDataException($"no '{lk.CollectionColumn}' column");
+        if (ci < 0) throw new SiloException(Err.Srv.Cfg.LookupColumnMissing, new { file = System.IO.Path.GetFileName(path), column = lk.CollectionColumn });
         var cols = lk.Fields.Select(kv => (idx: head.FindIndex(h => h.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)), field: kv.Value)).Where(x => x.idx >= 0).ToList();
         string? line;
         while ((line = r.ReadLine()) != null)
