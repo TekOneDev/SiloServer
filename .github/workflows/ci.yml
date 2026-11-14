@@ -10,6 +10,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # common/ is TekOneDev/SiloCommon (private): a read-only token for it is stored as SILOCOMMON_TOKEN.
+          submodules: true
+          token: ${{ secrets.SILOCOMMON_TOKEN }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x

@@ -1,3 +1,4 @@
+using Silo.Isolation;
 using System.Diagnostics;
 using System.Text;
 using Silo.Plugins;

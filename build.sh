@@ -3,6 +3,8 @@
 # Runs on Linux or Windows (Git Bash) with the .NET 10 SDK.
 set -euo pipefail
 cd "$(dirname "$0")"
+# The sandbox (and soon the file readers) come from SiloCommon in common/, shared with Silo Desktop.
+[ -f common/src/Silo.Sandbox/Silo.Sandbox.csproj ] || git submodule update --init common
 VER=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)
 OUT=${1:-dist}
 PKG="$OUT/Silo-Server-$VER-win-x64"

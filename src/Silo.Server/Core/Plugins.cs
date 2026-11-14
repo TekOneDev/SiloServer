@@ -1,3 +1,4 @@
+using Silo.Isolation;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;

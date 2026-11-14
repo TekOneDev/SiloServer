@@ -38,11 +38,11 @@ public static class DataFolder
         foreach (var dir in new[] { settings.Root, settings.DataDir }.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (Path.GetPathRoot(Path.GetFullPath(dir)) == Path.GetFullPath(dir)) continue;
-            try { Silo.Plugins.Sandbox.ProtectFolder(dir); }
+            try { Silo.Isolation.Sandbox.ProtectFolder(dir); }
             catch (Exception e) { log.Warn($"The data folder {dir} could not be closed to plugins: {e.Message}"); }
         }
         var extra = Path.Combine(settings.Root, "plugins");
-        try { Directory.CreateDirectory(extra); Silo.Plugins.Sandbox.AllowRead(extra); }
+        try { Directory.CreateDirectory(extra); Silo.Isolation.Sandbox.AllowRead(extra); }
         catch (Exception e) { log.Warn($"The plugins folder {extra} could not be opened to plugins, so plugins installed there may not start: {e.Message}"); }
     }
 

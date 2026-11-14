@@ -150,7 +150,7 @@ public static class OcrEngine
     {
         // Job, no privileges, and low integrity when settings.ocrLowIntegrity is on (0.1.5). Reported on the first reply.
         string? isolation;
-        try { isolation = Silo.Plugins.Sandbox.ApplyIfAsked(); } catch (Exception e) { isolation = "FAILED (" + e.Message + ")"; }
+        try { isolation = Silo.Isolation.Sandbox.ApplyIfAsked(); } catch (Exception e) { isolation = "FAILED (" + e.Message + ")"; }
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(Console.Error);
         using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
@@ -195,11 +195,11 @@ public sealed class OcrPool : IDisposable
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true, StandardOutputEncoding = new UTF8Encoding(false),
         };
-        psi.Environment[Silo.Plugins.Sandbox.EnvMode] = _low ? "1" : "job";
-        psi.Environment[Silo.Plugins.Sandbox.EnvMemory] = _memoryMB.ToString();
+        psi.Environment[Silo.Isolation.Sandbox.EnvMode] = _low ? "1" : "job";
+        psi.Environment[Silo.Isolation.Sandbox.EnvMemory] = _memoryMB.ToString();
         if (_low && _scratch != null) psi.Environment["TEMP"] = psi.Environment["TMP"] = _scratch;
         var p = Process.Start(psi)!;
-        var problem = Silo.Plugins.Sandbox.Contain(p, (long)_memoryMB * 1024 * 1024);
+        var problem = Silo.Isolation.Sandbox.Contain(p, (long)_memoryMB * 1024 * 1024);
         if (problem != null) _log.Warn("OCR worker job could not be set up: " + problem);
         p.ErrorDataReceived += (_, _) => { };
         p.BeginErrorReadLine();

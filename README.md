@@ -143,6 +143,8 @@ Logs are in `C:\ProgramData\SiloServer\logs`.
 
 ## Build
 
+The plugin sandbox (and next, the file readers) is shared with Silo Desktop and lives in [SiloCommon](https://github.com/TekOneDev/SiloCommon), a git submodule in `common/`. Clone with `git clone --recursive`, or run `git submodule update --init` once.
+
 Run `./build.sh` with the .NET 10 SDK. It runs the tests, publishes the server and plugin host for win-x64 (self-contained), writes the plugin manifests, and zips the package into `dist/`.
 
 ## Known limits in this beta
