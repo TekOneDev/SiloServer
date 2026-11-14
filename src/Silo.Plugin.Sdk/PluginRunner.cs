@@ -21,6 +21,8 @@ public abstract class SourcePlugin
     public virtual bool Watch(EnumerateArgs args, Action<IReadOnlyList<string>> changed) => false;
     /// <summary>Make a readable local copy of an item that has no path. Returns a path.</summary>
     public virtual string? Fetch(EnumerateArgs args, string key) => null;
+    /// <summary>Make the copy inside <paramref name="dir"/> (the server's scratch folder), when the server names one (0.1.7).</summary>
+    public virtual string? Fetch(EnumerateArgs args, string key, string? dir) => Fetch(args, key);
     /// <summary>Re-read one item (after a change event). Null when it is gone.</summary>
     public virtual SourceItem? Get(EnumerateArgs args, string key) => null;
 }
@@ -80,7 +82,7 @@ public static class PluginRunner
                 w.Ok(req.Id, item == null ? null : JsonSerializer.SerializeToNode(item, Contract.Json));
                 return true;
             case "fetch":
-                var p = plugin.Fetch(a, req.Args?["key"]?.GetValue<string>() ?? "");
+                var p = plugin.Fetch(a, req.Args?["key"]?.GetValue<string>() ?? "", req.Args?["dir"]?.GetValue<string>());
                 w.Ok(req.Id, new JsonObject { ["path"] = p });
                 return true;
         }
@@ -114,12 +116,18 @@ public static class PluginRunner
         public void Log(string level, string msg) => Line(new Reply { Log = level, Msg = msg });
     }
 
+    static Writer? _current;
+
+    /// <summary>Writes a line to the server's log (shown on the admin page) from inside a plugin (0.1.7).</summary>
+    public static void Info(string message) => _current?.Log("info", message);
+
     static int Loop(PluginManifest manifest, Func<Request, Writer, bool> handle)
     {
         // Keep stdout for the protocol only: anything a library prints goes to stderr instead.
         var stdout = Console.OpenStandardOutput();
         Console.SetOut(Console.Error);
         var w = new Writer(stdout);
+        _current = w;
         // Sandbox before the first file is opened, when the server asks for it (0.1.5).
         try { manifest.Isolation = Sandbox.ApplyIfAsked(); }
         catch (Exception e) { manifest.Isolation = "FAILED (" + e.Message + ")"; }

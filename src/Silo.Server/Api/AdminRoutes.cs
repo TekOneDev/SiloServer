@@ -47,7 +47,7 @@ public static class AdminRoutes
                 sources = settings.Current.Sources.Select(src =>
                 {
                     var (cp, last, count, status) = cat.SourceInfo(src.Id);
-                    return new { src.Id, src.Name, src.Plugin, src.Enabled, src.Config, src.RescanMinutes, lastScan = last, count, status };
+                    return new { src.Id, src.Name, src.Plugin, src.Enabled, Config = Masked(src.Config), src.RescanMinutes, lastScan = last, count, status };
                 }),
                 types = cat.CountByType().Select(t => new { t.source, t.ext, t.n, t.bytes }),
                 errors = cat.RecentErrors(30).Select(x => new { x.id, x.name, x.error }),
@@ -75,6 +75,13 @@ public static class AdminRoutes
             if (string.IsNullOrWhiteSpace(src.Id)) src.Id = new string(src.Name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
             if (src.Config["root"]?.GetValue<string>() is { } root && src.Plugin == "silo.source.folder" && CannotRead(root) is { } why)
                 return Results.BadRequest(new { error = why });
+            // A password left as the mask (or blank) keeps the one already saved (0.1.7).
+            var before = settings.Current.Sources.FirstOrDefault(x => x.Id == src.Id);
+            foreach (var key in src.Config.Select(kv => kv.Key).Where(IsSecret).ToList())
+            {
+                var v = src.Config[key]?.ToString();
+                if ((v == Mask || string.IsNullOrEmpty(v)) && before?.Config[key] is { } old) src.Config[key] = old.DeepClone();
+            }
             settings.Update(s => { s.Sources.RemoveAll(x => x.Id == src.Id); s.Sources.Add(src); });
             e.RequestScan(src.Id);
             return Results.Ok(new { ok = true, id = src.Id });
@@ -99,7 +106,13 @@ public static class AdminRoutes
             return Results.Ok(new { ok = true, changed = rules.Fingerprint != before, path = rules.Path });
         });
         admin.MapGet("/log", (Log log) => Results.Json(log.Recent.Take(300)));
-        admin.MapGet("/settings", () => Results.Json(settings.Current));
+        admin.MapGet("/settings", () =>
+        {
+            // Never send source passwords back to the browser (0.1.7).
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(settings.Current, settings.Current.GetType(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!.AsObject();
+            if (node["sources"] is JsonArray arr) foreach (var srcNode in arr.OfType<JsonObject>()) if (srcNode["config"] is JsonObject c) srcNode["config"] = Masked(c);
+            return Results.Json(node);
+        });
         admin.MapPost("/settings", (JsonObject patch) =>
         {
             settings.Update(s =>
@@ -134,5 +147,19 @@ public static class AdminRoutes
                    "or for a share, to the share and its folders, then add it again.";
         }
         catch (Exception ex) { return $"Silo Server cannot open {root}: {ex.Message}"; }
+    }
+
+    const string Mask = "********";
+
+    static bool IsSecret(string key) => key.Contains("password", StringComparison.OrdinalIgnoreCase) || key.Contains("secret", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("token", StringComparison.OrdinalIgnoreCase) || key.Equals("apiKey", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A copy of a source's settings with passwords and keys replaced by a mask.</summary>
+    public static JsonObject Masked(JsonObject config)
+    {
+        var copy = (JsonObject)config.DeepClone();
+        foreach (var key in copy.Select(kv => kv.Key).Where(IsSecret).ToList())
+            if (!string.IsNullOrEmpty(copy[key]?.ToString())) copy[key] = Mask;
+        return copy;
     }
 }

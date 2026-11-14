@@ -565,8 +565,8 @@ const Preview = {
         <h2>${esc(c.title || c.name)}</h2>
         <div class="actions">
           <a class="btn primary small" href="/api/v1/items/${d.id}/file${isPdf ? "#page=" + this.page : ""}" target="_blank">${I.file} Open ${esc(ft(c.ftype, c.ext)[0])}${isPdf && this.page > 1 ? " at p." + this.page : ""}</a>
-          ${c.landing ? `<a class="btn small" href="${esc(c.landing)}" target="_blank" rel="noopener">${I.ext} Source page</a>` : ""}
-          ${c.loc ? `<button class="btn small" data-copy="${esc(c.loc)}" title="${esc(c.loc)}">${I.copy} Copy folder path</button>` : ""}
+          ${c.landing ? `<a class="btn small" href="${esc(c.landing)}" target="_blank" rel="noopener">${I.ext} ${esc(c.landingLabel || "Source page")}</a>` : ""}
+          ${c.loc ? `<button class="btn small" data-copy="${esc(c.loc)}" title="${esc(c.loc)}">${I.copy} ${(c.loc || "").startsWith("$/") ? "Copy Vault path" : "Copy folder path"}</button>` : ""}
           ${c.lat != null && MapView.map == null ? `<a class="btn small" href="${buildUrl("/map", Object.assign({}, readState(), { sel: d.id, page: 1 }))}" data-nav>${I.map} On map</a>` : ""}
         </div>
       </div>
@@ -904,7 +904,17 @@ async function renderAdmin() {
     <div class="panel"><h2>Actions</h2><div class="body" style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" data-a="scan">Rescan sources</button><button class="btn" data-a="pause" id="pauseBtn">Pause</button>
       <button class="btn" data-a="retry">Retry failed files</button><button class="btn" data-a="rules">Reload rules</button><button class="btn danger" data-a="reindex">Rebuild index</button></div></div>
-    <div class="panel"><h2>Sources <span class="sp"></span><button class="btn small" id="addSrcBtn">Add a folder</button></h2>
+    <div class="panel"><h2>Sources <span class="sp"></span><button class="btn small" id="addSrcBtn">Add a folder</button> <button class="btn small" id="addVaultBtn">Add Autodesk Vault</button></h2>
+      <div class="body hidden" id="addVault"><div class="form-row">
+        <label>Name<input id="vName" placeholder="Engineering Vault"></label>
+        <label>Vault server<input id="vServer" placeholder="http://vaultserver"></label>
+        <label>Vault name<input id="vVault" value="Vault"></label>
+        <label>Sign in as<select id="vAuth"><option value="vault">A Vault account</option><option value="windows">Silo Server's Windows account</option></select></label>
+        <label>Vault user<input id="vUser" placeholder="silo-indexer"></label>
+        <label>Password<input id="vPass" type="password" autocomplete="new-password"></label>
+        <label>Versions<select id="vVersion"><option value="released">Latest released (latest if never released)</option><option value="latest">Latest</option></select></label>
+        <button class="btn primary" id="vSave">Add and scan</button></div>
+        <p class="muted" style="font-size:12.5px;margin:10px 0 0">Silo signs in read-only and never changes anything in Vault. People see only the files Vault lets them read; Vault accounts with no Windows account get no access. Run <span class="mono">Silo.PluginHost.exe --vault-probe</span> first to check a new Vault.</p></div>
       <div class="body hidden" id="addSrc"><div class="form-row">
         <label>Name<input id="srcName" placeholder="Perth projects share"></label>
         <label>Folder (as the server sees it)<input id="srcRoot" placeholder="\\\\fileserver\\projects or D:\\Data" style="min-width:320px"></label>
@@ -928,6 +938,17 @@ async function renderAdmin() {
   </div>`;
   $$("[data-a]", app).forEach(b => b.addEventListener("click", () => adminAction(b.dataset.a)));
   $("#addSrcBtn").onclick = () => $("#addSrc").classList.toggle("hidden");
+  $("#addVaultBtn").onclick = () => $("#addVault").classList.toggle("hidden");
+  $("#vSave").onclick = async () => {
+    try {
+      const windows = $("#vAuth").value === "windows";
+      await api("/admin/sources", { name: $("#vName").value || "Autodesk Vault", plugin: "silo.source.vault", enabled: true, rescanMinutes: 30,
+        config: { server: $("#vServer").value, vault: $("#vVault").value, windowsAuth: windows, user: windows ? "" : $("#vUser").value, password: windows ? "" : $("#vPass").value,
+          root: "$", version: $("#vVersion").value, unreleased: "latest", openUrl: "explorer", exclude: ["*.bak", "*.dwl", "*.dwl2", "*.lck"] } });
+      $("#vPass").value = "";
+      toast("Vault added: scanning"); $("#addVault").classList.add("hidden"); adminStatus();
+    } catch (e) { toast(e.message, 5000); }
+  };
   $("#srcSave").onclick = async () => {
     try {
       await api("/admin/sources", { name: $("#srcName").value, plugin: "silo.source.folder", enabled: true, config: { root: $("#srcRoot").value, access: $("#srcAccess").value, sidecars: true } });
@@ -986,9 +1007,9 @@ async function adminStatus() {
   const act = Object.values(s.activity || {});
   $("#activity").textContent = s.paused ? "Paused" : act.length ? act.join(" · ") : s.dirty ? `Indexing ${num(s.dirty)}…` : "Idle";
   const pb = $("#pauseBtn"); pb.textContent = s.paused ? "Resume" : "Pause"; pb.dataset.paused = s.paused ? "1" : "0";
-  $("#sources").innerHTML = `<tr><th>Source</th><th>Folder</th><th>Access</th><th class="num">Files</th><th>Last scan</th><th>Status</th><th></th></tr>` + s.sources.map(x => {
+  $("#sources").innerHTML = `<tr><th>Source</th><th>Where</th><th>Access</th><th class="num">Files</th><th>Last scan</th><th>Status</th><th></th></tr>` + s.sources.map(x => {
     const bad = (x.status || "").startsWith("error");
-    return `<tr><td><b>${esc(x.name)}</b><div class="muted mono" style="font-size:11.5px">${esc(x.id)}</div></td><td class="mono" style="font-size:12.5px">${esc(x.config?.root || "")}</td><td>${x.config?.access === "public" ? "Everyone" : "NTFS"}</td><td class="num">${num(x.count)}</td><td>${x.lastScan ? new Date(x.lastScan).toLocaleString() : "never"}</td><td><span class="status-dot ${bad ? "bad" : ""}"></span>${esc(x.status || "")}</td>
+    return `<tr><td><b>${esc(x.name)}</b><div class="muted mono" style="font-size:11.5px">${esc(x.id)}</div></td><td class="mono" style="font-size:12.5px">${esc(x.plugin === "silo.source.vault" ? `${x.config?.server || ""} · ${x.config?.vault || ""}` : x.config?.root || "")}</td><td>${x.plugin === "silo.source.vault" ? "Vault" : x.config?.access === "public" ? "Everyone" : "NTFS"}</td><td class="num">${num(x.count)}</td><td>${x.lastScan ? new Date(x.lastScan).toLocaleString() : "never"}</td><td><span class="status-dot ${bad ? "bad" : ""}"></span>${esc(x.status || "")}</td>
       <td style="white-space:nowrap"><button class="btn small" data-scan="${esc(x.id)}">Rescan</button> <button class="btn small danger" data-del="${esc(x.id)}">Remove</button></td></tr>`;
   }).join("");
   $$("[data-scan]").forEach(b => b.onclick = async () => { await api("/admin/scan?source=" + encodeURIComponent(b.dataset.scan), {}); toast("Scanning"); });

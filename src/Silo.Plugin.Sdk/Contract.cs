@@ -64,6 +64,11 @@ public sealed class PluginManifest
     public bool ReadsInPlace { get; set; }
     /// <summary>Fields this plugin may emit. Facet fields become filters in the search UI automatically.</summary>
     public List<FieldSpec> Fields { get; set; } = new();
+    /// <summary>
+    /// Sources whose items have no path the server can read (a document system such as Autodesk Vault): the core
+    /// asks the source to "fetch" a copy into the scratch folder when it reads or serves the file, then deletes it (0.1.7).
+    /// </summary>
+    public bool Fetches { get; set; }
     /// <summary>Sources: default settings shown in the admin page when a source is added.</summary>
     public JsonObject? ConfigTemplate { get; set; }
     /// <summary>

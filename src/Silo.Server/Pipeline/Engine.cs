@@ -120,6 +120,13 @@ public sealed class Engine : BackgroundService
                 if (m > 0) _log.Info($"{p.Manifest.Name} can now read {ext} files: reading {m:N0}.");
             }
         }
+        // Copies a source fetched before a crash or restart.
+        try
+        {
+            if (Directory.Exists(_plugins.Scratch))
+                foreach (var d in Directory.EnumerateDirectories(_plugins.Scratch, "silo-fetch-*")) try { Directory.Delete(d, true); } catch { }
+        }
+        catch { }
         IndexBuilding = _cat.DirtyCount() > 5000;
         if (_settings.Current.Ocr)
         {
@@ -279,30 +286,92 @@ public sealed class Engine : BackgroundService
         var it = _cat.Load(id);
         if (it == null || it.State != ItemState.Pending) return;
         Stats.Activity["extract"] = $"Reading {it.Name}";
-        if (it.Text != null || it.Path == null) { _cat.SaveExtract(id, ItemState.Done, null, null, null, null, 0, null); return; }
+        // Items with no path come inline, or from a source that keeps the files itself (Autodesk Vault, 0.1.7).
+        if (it.Text != null || (it.Path == null && !SourceFetches(it))) { _cat.SaveExtract(id, ItemState.Done, null, null, null, null, 0, null); return; }
         var filter = _plugins.FilterFor(it.Name, it.Ext);
         if (filter == null) { _cat.SaveExtract(id, ItemState.MetadataOnly, null, null, null, null, 0, null); return; }
         var m = filter.Manifest;
         if (it.Size > m.MaxFileMB * 1024L * 1024L) { _cat.SaveExtract(id, ItemState.MetadataOnly, filter.Id + "@" + m.Version, null, null, $"larger than {m.MaxFileMB:N0} MB: name and details only", 0, null); return; }
+        string? fetched = null;
+        if (it.Path == null)
+        {
+            Stats.Activity["extract"] = $"Fetching {it.Name}";
+            try { fetched = FetchCopy(it, stop); }
+            catch (Exception e) when (e is not OperationCanceledException) { _cat.SaveExtract(id, ItemState.Failed, null, null, null, "could not get the file from its source: " + e.Message, 0, null); return; }
+            if (fetched == null) { _cat.SaveExtract(id, ItemState.Failed, null, null, null, "the source did not hand over the file", 0, null); return; }
+            Stats.Activity["extract"] = $"Reading {it.Name}";
+        }
         var pool = _plugins.Pool(filter, _settings.ExtractWorkers);
         var timeout = TimeSpan.FromSeconds(Math.Min(3600, m.TimeoutSec + (m.ReadsInPlace ? 0 : it.Size / 1_000_000.0 * 2)));
         var sw = Stopwatch.StartNew();
         ExtractResult? x = null; string? error = null;
         try
         {
-            var args = new JsonObject { ["path"] = it.Path, ["ext"] = it.Ext ?? "", ["size"] = it.Size, ["maxPages"] = 5000, ["maxChars"] = 30_000_000 };
+            var args = new JsonObject { ["path"] = fetched ?? it.Path, ["ext"] = it.Ext ?? "", ["size"] = it.Size, ["maxPages"] = 5000, ["maxChars"] = 30_000_000 };
             x = pool.Call("extract", args, timeout, stop)?.Deserialize<ExtractResult>(Contract.Json);
         }
         catch (Exception e) when (e is not OperationCanceledException) { error = e.Message; }
+        finally { DropCopy(fetched); }
         Interlocked.Increment(ref Stats.Extracted);
         lock (Stats) Stats.ExtractMs += sw.Elapsed.TotalMilliseconds;
         var tag = filter.Id + "@" + m.Version;
         if (x == null) { Interlocked.Increment(ref Stats.ExtractFailed); _cat.SaveExtract(id, ItemState.Failed, tag, null, null, error ?? "no result", 0, null); return; }
         var pages = x.Pages;
-        int ocrWanted = x.OcrImage ? 1 : Math.Min(pages.Count(p => p.NeedsOcr), _settings.Current.MaxOcrPagesPerFile);
+        // OCR reads the file again later; a fetched copy is gone by then, so those files keep their text layer only.
+        int ocrWanted = fetched != null ? 0 : x.OcrImage ? 1 : Math.Min(pages.Count(p => p.NeedsOcr), _settings.Current.MaxOcrPagesPerFile);
         bool ocr = ocrWanted > 0 && OcrAvailable && _settings.Current.Ocr;
         var warn = x.Warnings.Count > 0 ? string.Join("; ", x.Warnings.Take(3)) : null;
         _cat.SaveExtract(id, ocr ? ItemState.NeedsOcr : ItemState.Done, tag, x, pages, warn, ocr ? ocrWanted : 0, TextHash(pages));
+    }
+
+    // ---------- sources that keep their own files (0.1.7) ----------
+
+    SourceConfig? SourceOf(ItemRow it) => _settings.Current.Sources.FirstOrDefault(s => s.Id == it.SourceId && s.Enabled);
+
+    bool SourceFetches(ItemRow it) => SourceOf(it) is { } src && _plugins.Get(src.Plugin) is { Enabled: true, Manifest.Fetches: true };
+
+    /// <summary>
+    /// Asks the item's source for a copy of the file in the plugins' scratch folder (where a sandboxed plugin may write
+    /// and a sandboxed filter may read). Returns its path, or null when the source has no copy for it. The caller
+    /// removes it with <see cref="DropCopy"/>.
+    /// </summary>
+    public string? FetchCopy(ItemRow it, CancellationToken ct)
+    {
+        var src = SourceOf(it);
+        if (src == null) return null;
+        var info = _plugins.Get(src.Plugin);
+        if (info is not { Enabled: true, Manifest.Fetches: true }) return null;
+        var dir = _plugins.Scratch;
+        Directory.CreateDirectory(dir);
+        var pool = _plugins.Pool(info, 2);
+        var r = pool.Call("fetch", new JsonObject { ["source"] = SourceArgs(src), ["key"] = it.Key, ["dir"] = dir }, TimeSpan.FromMinutes(30), ct);
+        var p = r?["path"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(p)) return null;
+        // The copy must be inside the scratch folder: a plugin cannot point the server at other files.
+        var full = Path.GetFullPath(p);
+        var root = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
+        {
+            _log.Warn($"[{info.Id}] fetch returned a path outside the scratch folder; ignored.");
+            return null;
+        }
+        return full;
+    }
+
+    /// <summary>Deletes a fetched copy and the folder the source made for it.</summary>
+    public void DropCopy(string? path)
+    {
+        if (path == null) return;
+        try
+        {
+            var root = Path.GetFullPath(_plugins.Scratch).TrimEnd(Path.DirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(path);
+            if (parent != null && !string.Equals(Path.GetFullPath(parent).TrimEnd(Path.DirectorySeparatorChar), root, StringComparison.OrdinalIgnoreCase)
+                && Path.GetFullPath(parent).StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                Directory.Delete(parent, true);
+            else File.Delete(path);
+        }
+        catch (Exception e) { _log.Debug($"could not delete fetched copy {path}: {e.Message}"); }
     }
 
     public static string? TextHash(IReadOnlyList<PageText> pages)
@@ -471,6 +540,9 @@ public sealed class Engine : BackgroundService
             {
                 var pages = _cat.Pages(id);
                 ApplyEnrichment(row);
+                // Sources can declare fields too (Vault part number, state...): their metadata fills them (0.1.7).
+                foreach (var (k, v) in row.Meta)
+                    if (declared.ContainsKey("x." + k) && !row.Fields.ContainsKey(k)) row.Fields[k] = v;
                 var d = _rules.Apply(row, pages);
                 _index.Put(new SearchIndex.Input(row, d, pages, declared));
                 Interlocked.Increment(ref Stats.Indexed);
